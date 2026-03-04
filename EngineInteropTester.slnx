@@ -1,0 +1,6 @@
+<Solution>
+  <Folder Name="/src/" />
+  <Folder Name="/src/windows/">
+    <Project Path="src/windows/EngineInteropTester.WinUI/EngineInteropTester.WinUI.csproj" />
+  </Folder>
+</Solution>
