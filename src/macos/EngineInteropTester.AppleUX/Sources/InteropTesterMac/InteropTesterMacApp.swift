@@ -20,7 +20,10 @@ struct InteropTesterMacApp: App {
                     Button("Issue Dev Token") { Task { await viewModel.issueDevToken() } }
                 }
                 TextField("Bearer token", text: $viewModel.bearerToken)
-                TextField("TLS cert SHA-256 pin (required for HTTPS)", text: $viewModel.tlsPin)
+                HStack {
+                    TextField("TLS cert SHA-256 pin (required for HTTPS)", text: $viewModel.tlsPin)
+                    Button("Fetch TLS Pin") { Task { await viewModel.fetchTlsPin(forceRefresh: true) } }
+                }
 
                 Text("Cluster").font(.headline)
                 HStack {
@@ -200,6 +203,7 @@ final class InteropViewModel: ObservableObject {
     }
 
     private func get(path: String) async throws -> Data {
+        _ = try await ensureTlsPinIfNeeded(forceRefresh: false)
         var request = URLRequest(url: try absolute(path: path))
         request.httpMethod = "GET"
         applyHeaders(&request, includeAuth: true)
@@ -209,6 +213,7 @@ final class InteropViewModel: ObservableObject {
     }
 
     private func post(path: String, body: [String: Any], includeAuth: Bool) async throws -> Data {
+        _ = try await ensureTlsPinIfNeeded(forceRefresh: false)
         var request = URLRequest(url: try absolute(path: path))
         request.httpMethod = "POST"
         applyHeaders(&request, includeAuth: includeAuth)
@@ -258,6 +263,64 @@ final class InteropViewModel: ObservableObject {
         }
 
         return url
+    }
+
+    @discardableResult
+    func fetchTlsPin(forceRefresh: Bool) async -> String? {
+        do {
+            let pin = try await ensureTlsPinIfNeeded(forceRefresh: forceRefresh)
+            if let pin {
+                log("tls pin fetched: \(pin)")
+            }
+            return pin
+        } catch {
+            log("tls pin fetch failed: \(error.localizedDescription)")
+            return nil
+        }
+    }
+
+    private func ensureTlsPinIfNeeded(forceRefresh: Bool) async throws -> String? {
+        guard let base = URL(string: baseUrl), base.scheme?.lowercased() == "https" else {
+            return nil
+        }
+
+        let current = normalizedPin()
+        if !forceRefresh && !current.isEmpty {
+            return current
+        }
+
+        let pin = try await resolveTlsPin(base: base)
+        tlsPin = pin
+        session = nil
+        sessionCacheKey = ""
+        return pin
+    }
+
+    private func resolveTlsPin(base: URL) async throws -> String {
+        let probeUrl = URL(string: "/", relativeTo: base)?.absoluteURL ?? base
+        var request = URLRequest(url: probeUrl)
+        request.httpMethod = "HEAD"
+
+        return try await withCheckedThrowingContinuation { continuation in
+            let delegate = TlsProbeDelegate()
+            delegate.onPin = { pin in
+                continuation.resume(returning: pin)
+            }
+            delegate.onError = { error in
+                continuation.resume(throwing: error)
+            }
+
+            let session = URLSession(configuration: .default, delegate: delegate, delegateQueue: nil)
+            let task = session.dataTask(with: request) { _, _, error in
+                if let error {
+                    delegate.failIfPending(error)
+                    return
+                }
+
+                delegate.failIfPending(NSError(domain: "InteropTester", code: -3, userInfo: [NSLocalizedDescriptionKey: "TLS probe completed without certificate"]))
+            }
+            task.resume()
+        }
     }
 
     private func urlSession(for url: URL?) -> URLSession {
@@ -399,5 +462,38 @@ final class PinnedSessionDelegate: NSObject, URLSessionDelegate {
     private func sha256Hex(_ data: Data) -> String {
         let digest = SHA256.hash(data: data)
         return digest.map { String(format: "%02X", $0) }.joined()
+    }
+}
+
+final class TlsProbeDelegate: NSObject, URLSessionDelegate {
+    var onPin: ((String) -> Void)?
+    var onError: ((Error) -> Void)?
+    private var completed = false
+
+    func urlSession(_ session: URLSession, didReceive challenge: URLAuthenticationChallenge, completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void) {
+        guard challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust,
+              let trust = challenge.protectionSpace.serverTrust,
+              let certificate = SecTrustGetCertificateAtIndex(trust, 0) else {
+            completionHandler(.performDefaultHandling, nil)
+            return
+        }
+
+        let certData = SecCertificateCopyData(certificate) as Data
+        let digest = SHA256.hash(data: certData).map { String(format: "%02X", $0) }.joined()
+        if !completed {
+            completed = true
+            onPin?(digest)
+        }
+
+        completionHandler(.useCredential, URLCredential(trust: trust))
+    }
+
+    func failIfPending(_ error: Error) {
+        if completed {
+            return
+        }
+
+        completed = true
+        onError?(error)
     }
 }

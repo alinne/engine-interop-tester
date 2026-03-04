@@ -1,5 +1,7 @@
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
+using System.Net.Security;
+using System.Net.Sockets;
 using System.Security.Cryptography.X509Certificates;
 using System.Text.Json;
 using Microsoft.UI.Dispatching;
@@ -51,6 +53,22 @@ public sealed partial class MainWindow : Window
         catch (Exception ex)
         {
             Log($"bootstrap exchange failed: {ex.Message}");
+        }
+    }
+
+    private async void FetchTlsPinButton_OnClick(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            var pin = await EnsureTlsPinAsync(forceRefresh: true);
+            if (!string.IsNullOrWhiteSpace(pin))
+            {
+                Log($"tls pin fetched: {pin}");
+            }
+        }
+        catch (Exception ex)
+        {
+            Log($"tls pin fetch failed: {ex.Message}");
         }
     }
 
@@ -195,6 +213,7 @@ public sealed partial class MainWindow : Window
 
     private async Task<JsonElement> SendGetAsync(string relativePath)
     {
+        await EnsureTlsPinAsync(forceRefresh: false);
         var client = GetHttpClient();
         using var request = new HttpRequestMessage(HttpMethod.Get, relativePath);
         ApplyAuthHeader(request);
@@ -210,6 +229,7 @@ public sealed partial class MainWindow : Window
 
     private async Task<JsonElement> PostJsonAsync(string relativePath, object payload, bool includeAuth)
     {
+        await EnsureTlsPinAsync(forceRefresh: false);
         var client = GetHttpClient();
         using var request = new HttpRequestMessage(HttpMethod.Post, relativePath)
         {
@@ -286,6 +306,45 @@ public sealed partial class MainWindow : Window
         };
         _httpClientCacheKey = cacheKey;
         return _httpClient;
+    }
+
+    private async Task<string?> EnsureTlsPinAsync(bool forceRefresh)
+    {
+        var baseUri = new System.Uri(BaseUrlText.Text.Trim(), System.UriKind.Absolute);
+        if (!string.Equals(baseUri.Scheme, System.Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        var existing = NormalizeHex(TlsPinText.Text);
+        if (!forceRefresh && !string.IsNullOrWhiteSpace(existing))
+        {
+            return existing;
+        }
+
+        var resolved = await ResolveTlsPinAsync(baseUri);
+        TlsPinText.Text = resolved;
+        return resolved;
+    }
+
+    private static async Task<string> ResolveTlsPinAsync(System.Uri baseUri)
+    {
+        using var tcp = new TcpClient();
+        var port = baseUri.Port > 0 ? baseUri.Port : 443;
+        await tcp.ConnectAsync(baseUri.Host, port);
+
+        using var ssl = new SslStream(
+            tcp.GetStream(),
+            leaveInnerStreamOpen: false,
+            static (_, _, _, _) => true);
+        await ssl.AuthenticateAsClientAsync(baseUri.Host);
+        if (ssl.RemoteCertificate is null)
+        {
+            throw new InvalidOperationException("remote certificate unavailable");
+        }
+
+        var cert = new X509Certificate2(ssl.RemoteCertificate);
+        return NormalizeHex(cert.GetCertHashString(System.Security.Cryptography.HashAlgorithmName.SHA256));
     }
 
     private void ApplyAuthHeader(HttpRequestMessage request)
