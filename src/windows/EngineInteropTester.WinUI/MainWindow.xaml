@@ -1,0 +1,31 @@
+<Window
+    x:Class="EngineInteropTester.WinUI.MainWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    Title="Engine Interop Tester">
+    <ScrollViewer>
+        <StackPanel Padding="16">
+            <TextBox x:Name="BaseUrlText" Text="https://127.0.0.1:5109" />
+            <TextBox x:Name="BootstrapTokenText" />
+            <Button Content="Exchange Bootstrap" Click="ExchangeBootstrapButton_OnClick" />
+            <Button Content="Issue Dev Token" Click="IssueDevTokenButton_OnClick" />
+            <TextBox x:Name="BearerTokenText" />
+            <TextBox x:Name="TlsPinText" />
+
+            <Button x:Name="RefreshButton" Content="Refresh Peers" Click="RefreshButton_OnClick" />
+            <TextBox x:Name="CapabilityFilterText" />
+            <CheckBox x:Name="AutoRefreshCheck" Checked="AutoRefreshCheck_OnChecked" Unchecked="AutoRefreshCheck_OnUnchecked" />
+            <TextBox x:Name="RefreshIntervalMsText" Text="3000" />
+            <Button Content="Export Snapshot" Click="ExportSnapshotButton_OnClick" />
+
+            <TextBox x:Name="PeerIdText" />
+            <TextBox x:Name="SessionIdText" Text="session-a" />
+            <Button x:Name="RequestAuthorityButton" Content="Request Clock Authority" Click="RequestAuthorityButton_OnClick" />
+            <Button Content="Release Authority" Click="ReleaseAuthorityButton_OnClick" />
+            <Button Content="Apply Clock Sync" Click="ApplyClockSyncButton_OnClick" />
+
+            <TextBox x:Name="PeersJson" Height="260" AcceptsReturn="True" IsReadOnly="True" />
+            <TextBox x:Name="LogText" Height="220" AcceptsReturn="True" IsReadOnly="True" />
+        </StackPanel>
+    </ScrollViewer>
+</Window>
