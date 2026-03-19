@@ -6,13 +6,16 @@ param(
 
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 . (Join-Path $scriptDir 'lib\interop-http.ps1')
+. (Join-Path $scriptDir 'lib\plane-a-routes.ps1')
 
 $client = New-InteropHttpClient -BaseUrl $BaseUrl -TlsPin $TlsPin
-$issue = Invoke-InteropJson -Client $client -Method POST -Path '/v1/auth/bootstrap/dev/issue' -Body @{ principal = $Principal }
-if (-not $issue.bootstrapToken) { throw 'bootstrap token missing from /v1/auth/bootstrap/dev/issue response' }
+$issuePath = Get-PlaneADeveloperBootstrapIssuePath
+$issue = Invoke-InteropJson -Client $client -Method POST -Path $issuePath -Body @{ principal = $Principal }
+if (-not $issue.bootstrapToken) { throw "bootstrap token missing from $issuePath response" }
 
-$exchange = Invoke-InteropJson -Client $client -Method POST -Path '/v1/auth/bootstrap/exchange' -Body @{ bootstrapToken = $issue.bootstrapToken }
-if (-not $exchange.accessToken) { throw 'access token missing from /v1/auth/bootstrap/exchange response' }
+$exchangePath = Get-PlaneABootstrapExchangePath
+$exchange = Invoke-InteropJson -Client $client -Method POST -Path $exchangePath -Body @{ bootstrapToken = $issue.bootstrapToken }
+if (-not $exchange.accessToken) { throw "access token missing from $exchangePath response" }
 
 [pscustomobject]@{
   baseUrl = $BaseUrl

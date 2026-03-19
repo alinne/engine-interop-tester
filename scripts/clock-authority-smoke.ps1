@@ -4,27 +4,39 @@ param(
   [Parameter(Mandatory)] [string]$BearerToken,
   [Parameter(Mandatory)] [string]$PeerId,
   [Parameter(Mandatory)] [string]$ExecutionSessionId,
-  [long]$ExternalTick = 120
+  [long]$ExternalTick = 120,
+  [switch]$ManualReview,
+  [switch]$Reject
 )
 
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 . (Join-Path $scriptDir 'lib\interop-http.ps1')
+. (Join-Path $scriptDir 'lib\plane-a-routes.ps1')
 
 $client = New-InteropHttpClient -BaseUrl $BaseUrl -TlsPin $TlsPin
 
-$authority = Invoke-InteropJson -Client $client -Method POST -Path "/v1/interop/peers/$([System.Uri]::EscapeDataString($PeerId))/clock/authority/request" -BearerToken $BearerToken -Body @{
+$authority = Invoke-InteropJson -Client $client -Method POST -Path (Get-PlaneAClockAuthorityRequestPath -PeerId $PeerId) -BearerToken $BearerToken -Body @{
   executionSessionId = $ExecutionSessionId
-  autoAccept = $true
+  autoAccept = -not $ManualReview.IsPresent
 }
 
-$sync = Invoke-InteropJson -Client $client -Method POST -Path "/v1/interop/peers/$([System.Uri]::EscapeDataString($PeerId))/clock/sync/apply" -BearerToken $BearerToken -Body @{
+$decision = $null
+if ($ManualReview.IsPresent) {
+  $decision = Invoke-InteropJson -Client $client -Method POST -Path (Get-PlaneAClockAuthorityRespondPath -PeerId $PeerId) -BearerToken $BearerToken -Body @{
+    executionSessionId = $ExecutionSessionId
+    accepted = -not $Reject.IsPresent
+    reasonCode = if ($Reject.IsPresent) { 'script_reject' } else { 'script_accept' }
+  }
+}
+
+$sync = Invoke-InteropJson -Client $client -Method POST -Path (Get-PlaneAClockSyncApplyPath -PeerId $PeerId) -BearerToken $BearerToken -Body @{
   executionSessionId = $ExecutionSessionId
   externalTick = $ExternalTick
   externalTimeNs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() * 1000000
   reasonCode = 'script_sync'
 }
 
-$status = Invoke-InteropJson -Client $client -Method POST -Path "/v1/interop/peers/$([System.Uri]::EscapeDataString($PeerId))/clock/authority/status" -BearerToken $BearerToken -Body @{
+$status = Invoke-InteropJson -Client $client -Method POST -Path (Get-PlaneAClockAuthorityStatusPath -PeerId $PeerId) -BearerToken $BearerToken -Body @{
   executionSessionId = $ExecutionSessionId
 }
 
@@ -33,6 +45,7 @@ $status = Invoke-InteropJson -Client $client -Method POST -Path "/v1/interop/pee
   peerId = $PeerId
   executionSessionId = $ExecutionSessionId
   authority = $authority
+  decision = $decision
   sync = $sync
   status = $status
 } | ConvertTo-Json -Depth 16

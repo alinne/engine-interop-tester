@@ -1,0 +1,24 @@
+name: internal-api-architecture
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify internal API architecture
+        shell: pwsh
+        run: |
+          $baseRef = if ("${{ github.event_name }}" -eq "pull_request" -and "${{ github.base_ref }}" -ne "") { "origin/${{ github.base_ref }}" } else { "HEAD~1" }
+          pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/ops/Assert-InternalApiArchitecture.ps1 -BaseRef $baseRef -Strict

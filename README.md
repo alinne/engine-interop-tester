@@ -17,3 +17,7 @@ Native connectivity test app for engine interop validation across platforms.
 - Business logic remains in engine endpoints and shared engine packages.
 - UX shells remain thin orchestration layers.
 - Encrypted communication is required for remote connectivity lanes; HTTPS requires certificate pin entry in testers.
+
+## Internal API Standard
+- Repo-local internal API gate: `pwsh ./scripts/ops/Assert-InternalApiArchitecture.ps1`
+- Prefer generated or contract-backed clients over new handwritten route knowledge.

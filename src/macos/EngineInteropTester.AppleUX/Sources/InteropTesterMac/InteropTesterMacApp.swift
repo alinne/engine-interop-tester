@@ -3,6 +3,32 @@ import Foundation
 import Security
 import CryptoKit
 
+private enum PlaneARoutes {
+    static let bootstrapExchange = "/v1/auth/bootstrap/exchange"
+    static let developerBootstrapIssue = "/v1/auth/bootstrap/dev/issue"
+    static let clusterCapabilities = "/v1/interop/cluster/capabilities"
+
+    static func requestClockAuthority(peerId: String) -> String {
+        "/v1/interop/peers/\(peerId.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? peerId)/clock/authority/request"
+    }
+
+    static func releaseClockAuthority(peerId: String) -> String {
+        "/v1/interop/peers/\(peerId.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? peerId)/clock/authority/release"
+    }
+
+    static func respondClockAuthority(peerId: String) -> String {
+        "/v1/interop/peers/\(peerId.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? peerId)/clock/authority/respond"
+    }
+
+    static func clockAuthorityStatus(peerId: String) -> String {
+        "/v1/interop/peers/\(peerId.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? peerId)/clock/authority/status"
+    }
+
+    static func applyClockSync(peerId: String) -> String {
+        "/v1/interop/peers/\(peerId.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? peerId)/clock/sync/apply"
+    }
+}
+
 @main
 struct InteropTesterMacApp: App {
     @StateObject private var viewModel = InteropViewModel()
@@ -39,7 +65,10 @@ struct InteropTesterMacApp: App {
 
                 HStack {
                     Button("Request Authority") { Task { await viewModel.requestAuthority() } }
+                    Button("Accept Authority") { Task { await viewModel.acceptAuthority() } }
+                    Button("Reject Authority") { Task { await viewModel.rejectAuthority() } }
                     Button("Release Authority") { Task { await viewModel.releaseAuthority() } }
+                    Button("Get Status") { Task { await viewModel.getAuthorityStatus() } }
                     Button("Apply Clock Sync") { Task { await viewModel.applyClockSync() } }
                 }
 
@@ -85,7 +114,7 @@ final class InteropViewModel: ObservableObject {
 
     func refreshPeers() async {
         do {
-            let data = try await get(path: "/v1/interop/cluster/capabilities")
+            let data = try await get(path: PlaneARoutes.clusterCapabilities)
             hydratePeerSelectionIfNeeded(data)
             log(clusterSummary(data))
             if let filter = normalizedCapabilityFilter(), !filter.isEmpty {
@@ -106,7 +135,7 @@ final class InteropViewModel: ObservableObject {
         }
 
         do {
-            let data = try await post(path: "/v1/auth/bootstrap/exchange", body: [
+            let data = try await post(path: PlaneARoutes.bootstrapExchange, body: [
                 "bootstrapToken": bootstrapToken
             ], includeAuth: false)
             if let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -123,7 +152,7 @@ final class InteropViewModel: ObservableObject {
 
     func issueDevToken() async {
         do {
-            let data = try await post(path: "/v1/auth/bootstrap/dev/issue", body: ["principal": "developer"], includeAuth: false)
+            let data = try await post(path: PlaneARoutes.developerBootstrapIssue, body: ["principal": "developer"], includeAuth: false)
             if let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
                let token = object["bootstrapToken"] as? String {
                 bootstrapToken = token
@@ -137,22 +166,44 @@ final class InteropViewModel: ObservableObject {
     }
 
     func requestAuthority() async {
-        await postClock(path: "/v1/interop/peers/\(peerId)/clock/authority/request", body: [
+        await postClock(path: PlaneARoutes.requestClockAuthority(peerId: peerId), body: [
             "executionSessionId": executionSessionId,
             "autoAccept": false
         ])
     }
 
     func releaseAuthority() async {
-        await postClock(path: "/v1/interop/peers/\(peerId)/clock/authority/release", body: [
+        await postClock(path: PlaneARoutes.releaseClockAuthority(peerId: peerId), body: [
             "executionSessionId": executionSessionId,
             "reasonCode": "tester_release"
         ])
     }
 
+    func acceptAuthority() async {
+        await postClock(path: PlaneARoutes.respondClockAuthority(peerId: peerId), body: [
+            "executionSessionId": executionSessionId,
+            "accepted": true,
+            "reasonCode": "tester_accept"
+        ])
+    }
+
+    func rejectAuthority() async {
+        await postClock(path: PlaneARoutes.respondClockAuthority(peerId: peerId), body: [
+            "executionSessionId": executionSessionId,
+            "accepted": false,
+            "reasonCode": "tester_reject"
+        ])
+    }
+
+    func getAuthorityStatus() async {
+        await postClock(path: PlaneARoutes.clockAuthorityStatus(peerId: peerId), body: [
+            "executionSessionId": executionSessionId
+        ])
+    }
+
     func applyClockSync() async {
         let nowNs = Int64(Date().timeIntervalSince1970 * 1_000_000_000)
-        await postClock(path: "/v1/interop/peers/\(peerId)/clock/sync/apply", body: [
+        await postClock(path: PlaneARoutes.applyClockSync(peerId: peerId), body: [
             "executionSessionId": executionSessionId,
             "externalTick": 120,
             "externalTimeNs": nowNs,
@@ -219,6 +270,12 @@ final class InteropViewModel: ObservableObject {
     }
 
     private func postClock(path: String, body: [String: Any]) async {
+        guard !peerId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              !executionSessionId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            log("peer id and execution session id are required")
+            return
+        }
+
         do {
             let data = try await post(path: path, body: body, includeAuth: true)
             log("POST \(path) ok")

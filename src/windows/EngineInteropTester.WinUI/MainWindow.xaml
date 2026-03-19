@@ -21,7 +21,10 @@
             <TextBox x:Name="PeerIdText" />
             <TextBox x:Name="SessionIdText" Text="session-a" />
             <Button x:Name="RequestAuthorityButton" Content="Request Clock Authority" Click="RequestAuthorityButton_OnClick" />
+            <Button Content="Accept Authority" Click="AcceptAuthorityButton_OnClick" />
+            <Button Content="Reject Authority" Click="RejectAuthorityButton_OnClick" />
             <Button Content="Release Authority" Click="ReleaseAuthorityButton_OnClick" />
+            <Button Content="Get Authority Status" Click="GetAuthorityStatusButton_OnClick" />
             <Button Content="Apply Clock Sync" Click="ApplyClockSyncButton_OnClick" />
 
             <TextBox x:Name="PeersJson" Height="260" AcceptsReturn="True" IsReadOnly="True" />

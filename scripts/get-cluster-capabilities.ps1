@@ -7,9 +7,10 @@ param(
 
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 . (Join-Path $scriptDir 'lib\interop-http.ps1')
+. (Join-Path $scriptDir 'lib\plane-a-routes.ps1')
 
 $client = New-InteropHttpClient -BaseUrl $BaseUrl -TlsPin $TlsPin
-$payload = Invoke-InteropJson -Client $client -Method GET -Path '/v1/interop/cluster/capabilities' -BearerToken $BearerToken
+$payload = Invoke-InteropJson -Client $client -Method GET -Path (Get-PlaneAClusterCapabilitiesPath) -BearerToken $BearerToken
 
 if (-not [string]::IsNullOrWhiteSpace($Capability) -and $payload.items) {
   $payload.items = @($payload.items | Where-Object {

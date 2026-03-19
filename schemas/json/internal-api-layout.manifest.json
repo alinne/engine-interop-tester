@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://linnaeus.internal/engine-interop-tester/internal-api-layout.manifest.json",
+  "title": "Engine Interop Tester Internal API Layout",
+  "type": "object",
+  "properties": {
+    "repo": { "const": "apps/engine-interop-tester" },
+    "conformance_state": { "const": "Guarded Legacy" },
+    "contract_paths": {
+      "type": "array",
+      "items": { "type": "string" },
+      "default": ["contracts/proto", "specs/openapi", "specs/asyncapi", "specs/arazzo", "schemas/json"]
+    },
+    "primary_surfaces": {
+      "type": "array",
+      "items": { "type": "string" },
+      "default": ["engine interop test harness and conformance clients"]
+    }
+  },
+  "required": ["repo", "conformance_state", "contract_paths", "primary_surfaces"],
+  "additionalProperties": false
+}
