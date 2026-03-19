@@ -1,5 +1,11 @@
 # Engine Interop Tester Validation
 
+## Standard verify path
+1. Run repo-local verification:
+   `pwsh ./scripts/verify.ps1`
+2. On Windows, this verifies the WinUI project build, the macOS Swift package build, the strict internal API guard, and the consumer-only no-local-host rule.
+3. On non-Windows hosts, it restores the WinUI project and skips the final WindowsAppSDK/XAML compile step, then continues with the Swift build and guard checks.
+
 ## Local single-machine (multi-instance)
 1. Run two+ engine instances on distinct ports/runtime directories.
 2. Generate auth credentials for instance A:

@@ -37,7 +37,10 @@ public sealed partial class MainWindow : Window
                 return;
             }
 
-            var json = await PostJsonAsync("/v1/auth/bootstrap/exchange", new { bootstrapToken = bootstrap }, includeAuth: false);
+            var json = await PostJsonAsync(
+                PlaneARoutes.BootstrapExchange,
+                new BootstrapExchangeContract(bootstrap),
+                includeAuth: false);
             if (json.TryGetProperty("accessToken", out var tokenNode))
             {
                 BearerTokenText.Text = tokenNode.GetString() ?? string.Empty;
@@ -58,7 +61,10 @@ public sealed partial class MainWindow : Window
     {
         try
         {
-            var issue = await PostJsonAsync("/v1/auth/bootstrap/dev/issue", new { principal = "developer" }, includeAuth: false);
+            var issue = await PostJsonAsync(
+                PlaneARoutes.DeveloperBootstrapIssue,
+                new DeveloperBootstrapIssueContract("developer"),
+                includeAuth: false);
             var bootstrap = issue.TryGetProperty("bootstrapToken", out var bootstrapNode) ? bootstrapNode.GetString() ?? string.Empty : string.Empty;
             BootstrapTokenText.Text = bootstrap;
             Log("dev bootstrap token issued");
@@ -71,32 +77,51 @@ public sealed partial class MainWindow : Window
 
     private async void RequestAuthorityButton_OnClick(object sender, RoutedEventArgs e)
     {
-        await PostClockAsync($"/v1/interop/peers/{Uri.EscapeDataString(PeerIdText.Text.Trim())}/clock/authority/request", new
-        {
-            executionSessionId = SessionIdText.Text.Trim(),
-            autoAccept = false
-        }, "clock authority request sent");
+        await PostClockAsync(
+            PlaneARoutes.RequestClockAuthority(PeerIdText.Text.Trim()),
+            new ClockAuthorityRequestContract(SessionIdText.Text.Trim(), AutoAccept: false),
+            "clock authority request sent");
     }
 
     private async void ReleaseAuthorityButton_OnClick(object sender, RoutedEventArgs e)
     {
-        await PostClockAsync($"/v1/interop/peers/{Uri.EscapeDataString(PeerIdText.Text.Trim())}/clock/authority/release", new
-        {
-            executionSessionId = SessionIdText.Text.Trim(),
-            reasonCode = "tester_release"
-        }, "clock authority release sent");
+        await PostClockAsync(
+            PlaneARoutes.ReleaseClockAuthority(PeerIdText.Text.Trim()),
+            new ClockAuthorityReleaseContract(SessionIdText.Text.Trim()),
+            "clock authority release sent");
+    }
+
+    private async void AcceptAuthorityButton_OnClick(object sender, RoutedEventArgs e)
+    {
+        await PostClockAsync(
+            PlaneARoutes.RespondClockAuthority(PeerIdText.Text.Trim()),
+            new ClockAuthorityRespondContract(SessionIdText.Text.Trim(), Accepted: true, ReasonCode: "tester_accept"),
+            "clock authority accept sent");
+    }
+
+    private async void RejectAuthorityButton_OnClick(object sender, RoutedEventArgs e)
+    {
+        await PostClockAsync(
+            PlaneARoutes.RespondClockAuthority(PeerIdText.Text.Trim()),
+            new ClockAuthorityRespondContract(SessionIdText.Text.Trim(), Accepted: false, ReasonCode: "tester_reject"),
+            "clock authority reject sent");
+    }
+
+    private async void GetAuthorityStatusButton_OnClick(object sender, RoutedEventArgs e)
+    {
+        await PostClockAsync(
+            PlaneARoutes.GetClockAuthorityStatus(PeerIdText.Text.Trim()),
+            new ClockAuthorityStatusContract(SessionIdText.Text.Trim()),
+            "clock authority status requested");
     }
 
     private async void ApplyClockSyncButton_OnClick(object sender, RoutedEventArgs e)
     {
         var nowNs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() * 1_000_000L;
-        await PostClockAsync($"/v1/interop/peers/{Uri.EscapeDataString(PeerIdText.Text.Trim())}/clock/sync/apply", new
-        {
-            executionSessionId = SessionIdText.Text.Trim(),
-            externalTick = 120L,
-            externalTimeNs = nowNs,
-            reasonCode = "tester_sync"
-        }, "clock sync apply sent");
+        await PostClockAsync(
+            PlaneARoutes.ApplyClockSync(PeerIdText.Text.Trim()),
+            new ClockSyncApplyContract(SessionIdText.Text.Trim(), 120L, nowNs, "tester_sync"),
+            "clock sync apply sent");
     }
 
     private async void ExportSnapshotButton_OnClick(object sender, RoutedEventArgs e)
@@ -156,7 +181,7 @@ public sealed partial class MainWindow : Window
     {
         try
         {
-            var payload = await SendGetAsync("/v1/interop/cluster/capabilities");
+            var payload = await SendGetAsync(PlaneARoutes.ClusterCapabilities);
             TryHydratePeerSelection(payload);
             Log(BuildClusterSummary(payload));
             var filter = CapabilityFilterText.Text.Trim();
@@ -232,6 +257,12 @@ public sealed partial class MainWindow : Window
 
     private async Task PostClockAsync(string relativePath, object payload, string success)
     {
+        if (string.IsNullOrWhiteSpace(PeerIdText.Text) || string.IsNullOrWhiteSpace(SessionIdText.Text))
+        {
+            Log("peer id and execution session id are required");
+            return;
+        }
+
         try
         {
             var json = await PostJsonAsync(relativePath, payload, includeAuth: true);

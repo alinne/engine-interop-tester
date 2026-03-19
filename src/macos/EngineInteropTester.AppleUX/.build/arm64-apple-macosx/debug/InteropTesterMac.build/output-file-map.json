@@ -1,0 +1,12 @@
+{
+  "": {
+    "swift-dependencies": "/Users/aaronlinne/Documents/GitHub/workbench/apps/engine-interop-tester/src/macos/EngineInteropTester.AppleUX/.build/arm64-apple-macosx/debug/InteropTesterMac.build/master.swiftdeps"
+  },
+  "/Users/aaronlinne/Documents/GitHub/workbench/apps/engine-interop-tester/src/macos/EngineInteropTester.AppleUX/Sources/InteropTesterMac/InteropTesterMacApp.swift": {
+    "dependencies": "/Users/aaronlinne/Documents/GitHub/workbench/apps/engine-interop-tester/src/macos/EngineInteropTester.AppleUX/.build/arm64-apple-macosx/debug/InteropTesterMac.build/InteropTesterMacApp.d",
+    "object": "/Users/aaronlinne/Documents/GitHub/workbench/apps/engine-interop-tester/src/macos/EngineInteropTester.AppleUX/.build/arm64-apple-macosx/debug/InteropTesterMac.build/InteropTesterMacApp.swift.o",
+    "swiftmodule": "/Users/aaronlinne/Documents/GitHub/workbench/apps/engine-interop-tester/src/macos/EngineInteropTester.AppleUX/.build/arm64-apple-macosx/debug/InteropTesterMac.build/InteropTesterMacApp~partial.swiftmodule",
+    "swift-dependencies": "/Users/aaronlinne/Documents/GitHub/workbench/apps/engine-interop-tester/src/macos/EngineInteropTester.AppleUX/.build/arm64-apple-macosx/debug/InteropTesterMac.build/InteropTesterMacApp.swiftdeps",
+    "diagnostics": "/Users/aaronlinne/Documents/GitHub/workbench/apps/engine-interop-tester/src/macos/EngineInteropTester.AppleUX/.build/arm64-apple-macosx/debug/InteropTesterMac.build/InteropTesterMacApp.dia"
+  }
+}
