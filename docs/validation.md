@@ -15,3 +15,7 @@
 
 ## Two-machine pass (later)
 - Repeat the same on LAN with pinned TLS certs and explicit pairing/consent.
+
+## Boundary check
+- Before landing repo changes, run `pwsh ./scripts/verify-shell-boundary.ps1`.
+- This repo is valid only as a thin interop UX shell over canonical engine interop endpoints.
