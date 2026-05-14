@@ -11,6 +11,7 @@
             <Button Content="Issue Dev Token" Click="IssueDevTokenButton_OnClick" />
             <TextBox x:Name="BearerTokenText" />
             <TextBox x:Name="TlsPinText" />
+            <Button Content="Fetch TLS Pin" Click="FetchTlsPinButton_OnClick" />
 
             <Button x:Name="RefreshButton" Content="Refresh Peers" Click="RefreshButton_OnClick" />
             <TextBox x:Name="CapabilityFilterText" />

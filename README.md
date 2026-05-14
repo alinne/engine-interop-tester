@@ -2,6 +2,8 @@
 
 Native connectivity test app for engine interop validation across platforms.
 
+This repository is an internal-only validation shell. Reusable interop/session/clock/runtime logic must live in `linnaeus-engine`; this repo should stay focused on test UX, scripts, and evidence capture.
+
 ## Targets
 - Windows: WinUI 3 app (`src/windows/EngineInteropTester.WinUI`)
 - macOS: SwiftUI app (`src/macos/EngineInteropTester.AppleUX`)
@@ -21,3 +23,7 @@ Native connectivity test app for engine interop validation across platforms.
 ## Internal API Standard
 - Repo-local internal API gate: `pwsh ./scripts/ops/Assert-InternalApiArchitecture.ps1`
 - Prefer generated or contract-backed clients over new handwritten route knowledge.
+
+## Verification
+- Run `pwsh ./scripts/verify-shell-boundary.ps1` before landing repo changes.
+- The verifier enforces that this repo stays on canonical `/v1/interop/*` and `/v1/auth/bootstrap/*` routes and does not grow direct `Linnaeus.Engine*` or `Provinode.Engine*` implementation references.

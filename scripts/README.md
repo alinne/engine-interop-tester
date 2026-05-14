@@ -8,3 +8,4 @@
 - `pwsh ./scripts/clock-authority-smoke.ps1 -BaseUrl https://127.0.0.1:5109 -TlsPin <SHA256_HEX> -BearerToken <JWT> -PeerId <peer> -ExecutionSessionId <session>`
 - `pwsh ./scripts/clock-authority-smoke.ps1 -BaseUrl https://127.0.0.1:5109 -TlsPin <SHA256_HEX> -BearerToken <JWT> -PeerId <peer> -ExecutionSessionId <session> -ManualReview [-Reject]`
 - `pwsh ./scripts/cluster-capability-matrix.ps1 -BaseUrls @('https://127.0.0.1:5109','https://127.0.0.1:5110') -TlsPin <SHA256_HEX> -BearerToken <JWT>`
+- `pwsh ./scripts/verify-shell-boundary.ps1`
