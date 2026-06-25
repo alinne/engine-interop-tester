@@ -2,6 +2,7 @@
 *.suo
 bin/
 obj/
+src/macos/EngineInteropTester.AppleUX/.build/
 .DS_Store
 .vscode/
 .idea/
