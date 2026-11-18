@@ -81,8 +81,12 @@ def make_server(client, port=8765):
                 parsed = parse_qs(urlsplit(self.path).query, keep_blank_values=True, max_num_fields=12)
                 # Google may append these informational fields; they confer no
                 # authority and are discarded rather than forwarded to Engine.
-                allowed = {"state", "code", "error", "error_description", "error_uri", "scope", "authuser", "prompt", "hd"}
+                allowed = {"state", "code", "error", "error_description", "error_uri", "scope", "authuser", "prompt", "hd", "iss"}
                 if set(parsed) - allowed or any(len(values) != 1 or len(values[0]) > 4096 for values in parsed.values()):
+                    return self.reject(400)
+                # Google's optional issuer identifies this fixed provider; it
+                # never selects an endpoint or changes Engine's state binding.
+                if "iss" in parsed and parsed["iss"] != ["https://accounts.google.com"]:
                     return self.reject(400)
                 query = {key: values[0] for key, values in parsed.items() if key in {"state", "code", "error"}}
                 result = client.complete_callback(query)

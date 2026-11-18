@@ -73,6 +73,24 @@ class ServerTests(unittest.TestCase):
         error.exception.close()
         self.assertEqual([{"state": "s", "error": "access_denied"}], calls)
 
+    def test_callback_accepts_google_issuer_without_forwarding_it(self):
+        calls = []
+        self.client.complete_callback = lambda query: calls.append(query) or {"isSuccess": True}
+        with self.opener.open(self.url + "/oauth/callback/google-drive?state=s&code=c&iss=https%3A%2F%2Faccounts.google.com&scope=drive") as response:
+            self.assertEqual(200, response.status)
+        self.assertEqual([{"state": "s", "code": "c"}], calls)
+
+    def test_callback_rejects_unexpected_or_duplicate_issuers(self):
+        calls = []
+        self.client.complete_callback = lambda query: calls.append(query) or {"isSuccess": True}
+        for issuer in ("https%3A%2F%2Fevil.invalid", "", "https%3A%2F%2Faccounts.google.com&iss=https%3A%2F%2Faccounts.google.com"):
+            with self.subTest(issuer=issuer):
+                with self.assertRaises(HTTPError) as error:
+                    self.opener.open(self.url + "/oauth/callback/google-drive?state=s&code=c&iss=" + issuer)
+                self.assertEqual(400, error.exception.code)
+                error.exception.close()
+        self.assertEqual([], calls)
+
     def test_callback_rejects_duplicate_keys_bad_hosts_and_subresource_requests(self):
         calls = []
         self.client.complete_callback = lambda query: calls.append(query) or {"isSuccess": True}
