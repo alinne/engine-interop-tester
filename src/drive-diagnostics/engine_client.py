@@ -105,7 +105,7 @@ class Config:
 
 
 class DriveClient:
-    """Small Engine client for the six currently published Drive diagnostics."""
+    """Small Engine client for the seven currently published Drive diagnostics."""
 
     def __init__(self, config: Config, contracts_path: str | os.PathLike[str] | None = None, timeout: float = 10.0) -> None:
         if timeout <= 0 or timeout > 60:
