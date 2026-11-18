@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Google Drive · Engine diagnostics</title>
+<link rel="stylesheet" href="/style.css">
+<script defer src="/app.js">
+</script>
+</head>
+<body>
+<main>
+<header>
+<span class="eyebrow">EXTERNAL CONNECTIONS / ENGINE INTEROP TESTER</span>
+<h1>Google Drive test bench</h1>
+<p>Exercise the shared Engine connection. Keep provider credentials and file custody inside Engine.</p>
+<span class="badge">Local diagnostic · live qualification pending</span>
+</header>
+<div class="steps">
+<section>
+<span class="number">01</span>
+<h2>Connect</h2>
+<p>Check the configured Google application, then sign in using Google's consent screen.</p>
+<div class="buttons">
+<button data-action="readiness">Check configuration</button>
+<button data-action="start" class="primary">Sign in with Google</button>
+</div>
+<a id="consent" target="_blank" rel="noopener noreferrer" hidden>Continue to Google ↗</a>
+<button data-action="status">Check sign-in result</button>
+<p class="hint">The callback goes to Engine. Return here after consent.</p>
+</section>
+<section>
+<span class="number">02</span>
+<h2>Choose a connection</h2>
+<p>Only Google Drive connections in the configured Engine owner scope appear here.</p>
+<button data-action="connections">Refresh connections</button>
+<label for="connection">Engine connection</label>
+<select id="connection">
+<option value="">Load connections first</option>
+</select>
+<p class="hint">Changing the connection clears the current folder and file selection.</p>
+</section>
+</div>
+<section class="browser">
+<div class="section-top">
+<div>
+<span class="number">03</span>
+<h2>Browse files</h2>
+</div>
+<button id="folders">List available folders</button>
+</div>
+<div class="views">
+<span>Legacy folder listing</span>
+<span aria-disabled="true">My Drive view · pending</span>
+<span aria-disabled="true">Shared with me · pending</span>
+<span aria-disabled="true">Shared drives · pending</span>
+</div>
+<p class="hint">This route does not prove a complete inventory. Dedicated shared-location views and continuation are awaiting Engine integration.</p>
+<label for="folder">Folder returned by Engine</label>
+<select id="folder">
+<option value="">Choose a connection first</option>
+</select>
+<button id="files">List files</button>
+<div id="pagination" class="notice" hidden>Engine returned a continuation cursor. This API has no continuation input; these results are incomplete.</div>
+<div class="table-scroll">
+<table>
+<thead>
+<tr>
+<th>Select</th>
+<th>Name</th>
+<th>Type</th>
+<th>Size</th>
+</tr>
+</thead>
+<tbody id="assets">
+<tr>
+<td colspan="4">Files appear after a successful Engine response.</td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
+<div class="steps">
+<section>
+<span class="number">04</span>
+<h2>Acquire &amp; open</h2>
+<p id="selection">Select one ISO or DICOM file.</p>
+<button id="acquire">Check acquisition availability</button>
+<p class="notice">Verified retained-source acquisition, progress, cancellation and ISO/DICOM opening are not connected to this harness yet. The legacy import endpoint is not used as a substitute.</p>
+</section>
+<section>
+<span class="number">05</span>
+<h2>Result</h2>
+<p id="status" role="status" aria-live="polite">Ready to check Engine.</p>
+<pre id="result">No requests made.</pre>
+<p class="hint">Sanitized response only. Nothing is saved by this app. Synthetic tests and live Google qualification are separate proof.</p>
+</section>
+</div>
+<footer>This diagnostic does not upload, delete, publish or modify Google Drive files. Engine authentication and policy remain authoritative.</footer>
+</main>
+</body>
+</html>

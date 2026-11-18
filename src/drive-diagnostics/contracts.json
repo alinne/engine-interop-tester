@@ -1,0 +1,47 @@
+{
+  "sourceRepository": "alinne/linnaeus-engine",
+  "sourceCommit": "7946f96b1c44f123d024889e8815ca4faedfec82",
+  "sourceHashes": {
+    "src/Linnaeus.Engine.ModelFabric.Contracts/EngineControlApiRoutes.cs": "e812ae61346d68f4b4a1be239c9c37aee516391dfcf49415d0aa6268083e94a3",
+    "src/Linnaeus.Engine.ModelFabric.Contracts/EngineControlApiRoutes.Media.cs": "024d79c3f57fa973453db823373f53bdb2278b161bc0ef379ca38bef7e03a3b9",
+    "src/Linnaeus.Engine.ModelFabric.Contracts/EngineControlApiRoutes.Control.cs": "8d7c7eeb7f4107d823bf822b8d2ab6067fb71da3ba206944a8c9042d8af9c373"
+  },
+  "operations": {
+    "readiness": {
+      "operationId": "cloud-media.oauth-apps.readiness",
+      "method": "GET",
+      "path": "/engine/v1/cloud/oauth-apps/readiness",
+      "visibility": "stable"
+    },
+    "start": {
+      "operationId": "cloud-media.oauth.start",
+      "method": "POST",
+      "path": "/engine/v1/cloud/oauth:start",
+      "visibility": "stable"
+    },
+    "status": {
+      "operationId": "cloud-media.oauth.status",
+      "method": "GET",
+      "path": "/engine/v1/cloud/oauth/status",
+      "visibility": "stable"
+    },
+    "connections": {
+      "operationId": "cloud.connections.list",
+      "method": "GET",
+      "path": "/engine/v1/cloud/connections",
+      "visibility": "internal"
+    },
+    "collections": {
+      "operationId": "cloud.collections.list",
+      "method": "POST",
+      "path": "/engine/v1/cloud/collections:list",
+      "visibility": "internal"
+    },
+    "assets": {
+      "operationId": "cloud.assets.list",
+      "method": "POST",
+      "path": "/engine/v1/cloud/assets:list",
+      "visibility": "internal"
+    }
+  }
+}
