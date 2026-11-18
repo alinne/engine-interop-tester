@@ -14,6 +14,7 @@ import http.client
 import os
 import re
 import ssl
+import secrets
 import urllib.parse
 from dataclasses import dataclass
 from pathlib import Path
@@ -112,6 +113,7 @@ class DriveClient:
         self.config = config
         self.timeout = timeout
         self._contracts_path = Path(contracts_path) if contracts_path else Path(__file__).with_name("contracts.json")
+        self._callback_state: str | None = None
         self._state: str | None = None
         self._connection_ids: set[str] = set()
         self._collection_ids: dict[str, set[str]] = {}
@@ -126,6 +128,7 @@ class DriveClient:
             # Starting over may select another Google account. Invalidate the
             # previous attempt before any fallible contract or network work.
             self._state = None
+            self._callback_state = None
             self._clear_connection_bindings()
         operation = self._operation(action)
         body: dict[str, Any] | None = None
@@ -164,12 +167,31 @@ class DriveClient:
                 return {"action": action, "isSuccess": False, "reasonCodes": ["engine_response_invalid"]}
             self._validate_authorization_url(url)
             self._state = state
+            self._callback_state = state
         elif action == "connections" and result.get("isSuccess"):
             self._remember_connections(result)
         elif action == "collections" and result.get("isSuccess"):
             result = {**result, "connectionId": self._last_collection_connection}
             self._remember_collections(result)
         return result
+
+    def complete_callback(self, parameters: Mapping[str, str]) -> dict[str, Any]:
+        """Relay one Engine-issued attempt; Engine owns PKCE and token exchange."""
+        if (set(parameters) - {"state", "code", "error"}
+                or any(not isinstance(value, str) or not value or len(value) > 4096 for value in parameters.values())
+                or ("code" in parameters) == ("error" in parameters)):
+            raise DriveClientError("callback_parameters_invalid")
+        state = parameters.get("state", "")
+        if not self._callback_state or not secrets.compare_digest(state, self._callback_state):
+            raise DriveClientError("callback_state_invalid")
+        # Consume before transport: a timeout is an unknown outcome, never a
+        # reason to replay a provider authorization code automatically.
+        self._callback_state = None
+        operation = self._operation("callback")
+        path = operation["path"].replace("{providerId}", _PROVIDER_ID)
+        result = self._request(operation["method"], self._path(path, "callback"),
+                               query=dict(parameters), body=None, callback_text=True)
+        return {"isSuccess": result.get("isSuccess") is True}
 
     @staticmethod
     def _normalize_published_shape(action: str, result: Mapping[str, Any]) -> dict[str, Any]:
@@ -247,7 +269,7 @@ class DriveClient:
         body["collectionRef"] = collection_ref
         return body
 
-    def _request(self, method: str, path: str, *, query: Mapping[str, str], body: Mapping[str, Any] | None) -> dict[str, Any]:
+    def _request(self, method: str, path: str, *, query: Mapping[str, str], body: Mapping[str, Any] | None, callback_text: bool = False) -> dict[str, Any]:
         base = self.config.base_url.rstrip("/")
         url = base + path
         if query:
@@ -272,7 +294,7 @@ class DriveClient:
             if parsed.query:
                 target += "?" + parsed.query
             headers = {
-                "Accept": "application/json",
+                "Accept": "text/plain" if callback_text else "application/json",
                 "Authorization": f"Bearer {self.config.bearer_token}",
                 _CONSUMER_HEADER: self.config.consumer_id,
             }
@@ -287,6 +309,13 @@ class DriveClient:
                 return {"isSuccess": False, "reasonCodes": ["engine_response_too_large"]}
             if response.status >= 400:
                 return {"isSuccess": False, "reasonCodes": ["engine_http_error"], "httpStatus": response.status}
+            if callback_text:
+                # The published callback returns fixed plain text. Never relay
+                # provider/Engine response bodies into the browser or logs.
+                valid = (response.status == 200
+                         and response.getheader("Content-Type", "").split(";", 1)[0] == "text/plain"
+                         and data == b"Cloud sign-in complete\n\nYou can return to the app.\n")
+                return {"isSuccess": valid}
             return self._parse_response(data, response.status)
         except DriveClientError:
             raise

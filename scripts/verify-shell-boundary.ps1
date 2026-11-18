@@ -58,7 +58,7 @@ $driveFiles = @(Get-ChildItem (Join-Path $repoRoot 'src/drive-diagnostics') -Rec
 $manualDriveRoutes = @(Select-String -Path $driveFiles.FullName -Pattern '/engine/v1/')
 if ($manualDriveRoutes.Count -gt 0) { throw 'Drive client contains handwritten Engine routes.' }
 $bindings = Get-Content (Join-Path $repoRoot 'src/drive-diagnostics/contracts.json') -Raw | ConvertFrom-Json
-if ($bindings.sourceCommit -notmatch '^[a-f0-9]{40}$' -or @($bindings.operations.PSObject.Properties).Count -ne 6) {
+if ($bindings.sourceCommit -notmatch '^[a-f0-9]{40}$' -or @($bindings.operations.PSObject.Properties).Count -ne 7) {
     throw 'Drive route projection provenance is invalid.'
 }
 foreach ($entry in $bindings.operations.PSObject.Properties) {

@@ -31,6 +31,7 @@ CONTRACTS = {
         "connections": {"method": "GET", "path": "/connections"},
         "collections": {"method": "POST", "path": "/collections"},
         "assets": {"method": "POST", "path": "/assets"},
+        "callback": {"method": "GET", "path": "/callback/{providerId}"},
     }
 }
 
@@ -83,6 +84,13 @@ class EngineHandler(BaseHTTPRequestHandler):
                 self._reply(200, {"productId": "product", "environmentId": "env", "providers": [{"providerId": "google-drive", "isConfigured": True, "isSignInAvailable": True, "reasonCodes": []}], "reasonCodes": []})
             else:
                 self._reply(200, {"isSuccess": True, "providers": [{"providerId": "google-drive", "isSignInAvailable": True}]})
+        elif route == "/callback/google-drive":
+            text = b"Cloud sign-in complete\n\nYou can return to the app.\n"
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.send_header("Content-Length", str(len(text)))
+            self.end_headers()
+            self.wfile.write(text)
         elif route == "/status":
             self._reply(200, {"isSuccess": True, "providerId": "google-drive", "state": "opaque-state", "status": "connected"})
         elif route == "/connections":
@@ -138,6 +146,49 @@ class DriveClientTests(unittest.TestCase):
 
     def client(self):
         return DriveClient(self.config, self.contracts.name)
+
+    def test_callback_uses_published_plain_text_contract_and_keeps_secrets_private(self):
+        client = self.client()
+        client.execute("start")
+        result = client.complete_callback({"state": "opaque-state", "code": "private-code"})
+        self.assertEqual({"isSuccess": True}, result)
+        method, path, _ = EngineHandler.calls[-1]
+        self.assertEqual("GET", method)
+        self.assertEqual("/callback/google-drive", urlsplit(path).path)
+        self.assertEqual(["private-code"], parse_qs(urlsplit(path).query)["code"])
+        with self.assertRaisesRegex(DriveClientError, "callback_state_invalid"):
+            client.complete_callback({"state": "opaque-state", "code": "private-code"})
+
+    def test_callback_requires_current_state_and_is_consumed_before_transport(self):
+        client = self.client()
+        with self.assertRaisesRegex(DriveClientError, "callback_state_invalid"):
+            client.complete_callback({"state": "opaque-state", "code": "private-code"})
+        client.execute("start")
+        with self.assertRaisesRegex(DriveClientError, "callback_state_invalid"):
+            client.complete_callback({"state": "other", "code": "private-code"})
+        with mock.patch.object(client, "_request", side_effect=DriveClientError("engine_unreachable")) as request:
+            with self.assertRaisesRegex(DriveClientError, "engine_unreachable"):
+                client.complete_callback({"state": "opaque-state", "code": "private-code"})
+            self.assertEqual("/callback/google-drive", request.call_args.args[1])
+            self.assertTrue(request.call_args.kwargs["callback_text"])
+        with self.assertRaisesRegex(DriveClientError, "callback_state_invalid"):
+            client.complete_callback({"state": "opaque-state", "code": "private-code"})
+        # Status remains available after the callback has been consumed.
+        self.assertTrue(client.execute("status")["isSuccess"])
+
+    def test_callback_rejects_ambiguous_or_unbounded_parameters(self):
+        client = self.client()
+        client.execute("start")
+        for query in ({"state": "opaque-state"},
+                      {"state": "opaque-state", "code": "a", "error": "b"},
+                      {"state": "opaque-state", "code": "x" * 4097},
+                      {"state": "opaque-state", "code": "a", "url": "https://evil.invalid"}):
+            with self.subTest(keys=list(query)):
+                with self.assertRaisesRegex(DriveClientError, "callback_parameters_invalid"):
+                    client.complete_callback(query)
+        with mock.patch.object(client, "_request", return_value={"isSuccess": False}) as request:
+            self.assertFalse(client.complete_callback({"state": "opaque-state", "error": "access_denied"})["isSuccess"])
+            self.assertEqual("access_denied", request.call_args.kwargs["query"]["error"])
 
     def test_full_flow_sends_bearer_and_keeps_refs_bound(self):
         client = self.client()

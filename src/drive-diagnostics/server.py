@@ -4,6 +4,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 import json
 from pathlib import Path
 import secrets
+from urllib.parse import urlsplit, parse_qs
 
 WEB = Path(__file__).with_name("web")
 ACTIONS = frozenset(("readiness", "start", "status", "connections", "collections", "assets", "acquire"))
@@ -53,7 +54,13 @@ def make_server(client, port=8765):
                 return False
 
         def do_GET(self):
-            if not self.host_allowed() or self.headers.get("Sec-Fetch-Site") == "cross-site":
+            if not self.host_allowed():
+                return self.reject()
+            # Only the fixed OAuth return accepts a cross-site navigation.
+            # Its Engine-issued state replaces the Strict cookie here only.
+            if urlsplit(self.path).path == "/oauth/callback/google-drive":
+                return self.oauth_callback()
+            if self.headers.get("Sec-Fetch-Site") == "cross-site":
                 return self.reject()
             if self.path == "/session":
                 if not self.has_cookie():
@@ -66,6 +73,25 @@ def make_server(client, port=8765):
                 return self.reject(404, "diagnostic_route_not_found")
             filename, media_type = assets[self.path]
             self.send_body(200, (WEB / filename).read_bytes(), media_type, set_cookie=self.path == "/")
+
+        def oauth_callback(self):
+            if len(self.path) > 16384 or self.headers.get("Sec-Fetch-Mode") not in (None, "navigate"):
+                return self.reject(400)
+            try:
+                parsed = parse_qs(urlsplit(self.path).query, keep_blank_values=True, max_num_fields=12)
+                # Google may append these informational fields; they confer no
+                # authority and are discarded rather than forwarded to Engine.
+                allowed = {"state", "code", "error", "error_description", "error_uri", "scope", "authuser", "prompt", "hd"}
+                if set(parsed) - allowed or any(len(values) != 1 or len(values[0]) > 4096 for values in parsed.values()):
+                    return self.reject(400)
+                query = {key: values[0] for key, values in parsed.items() if key in {"state", "code", "error"}}
+                result = client.complete_callback(query)
+                success = result.get("isSuccess") is True
+            except Exception:
+                success = False
+            text = (b"Google sign-in returned successfully. You can return to the test app and check status.\n"
+                    if success else b"Google sign-in did not complete. Return to the test app and start a new sign-in attempt.\n")
+            self.send_body(200 if success else 400, text, "text/plain; charset=utf-8")
 
         def do_POST(self):
             expected_origin = f"http://127.0.0.1:{self.server.server_port}"

@@ -42,6 +42,12 @@
       "method": "POST",
       "path": "/engine/v1/cloud/assets:list",
       "visibility": "internal"
+    },
+    "callback": {
+      "operationId": "cloud-media.oauth.callback",
+      "method": "GET",
+      "path": "/engine/v1/cloud/oauth/callback/{providerId}",
+      "visibility": "stable"
     }
   }
 }

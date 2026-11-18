@@ -13,6 +13,7 @@ SELECTION = {
     "connections": ("Cloud", "Connections", "cloud.connections.list"),
     "collections": ("Cloud", "CollectionsList", "cloud.collections.list"),
     "assets": ("Cloud", "AssetsList", "cloud.assets.list"),
+    "callback": ("CloudMedia", "OAuthCallbackTemplate", "cloud-media.oauth.callback"),
 }
 CONTRACT_ROOT = "src/Linnaeus.Engine.ModelFabric.Contracts/"
 SOURCE_FILES = [CONTRACT_ROOT + "EngineControlApiRoutes" + suffix + ".cs"
@@ -60,4 +61,4 @@ if __name__ == "__main__":
     else:
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_text(generated)
-        print("Projected six canonical Engine operations.")
+        print("Projected seven canonical Engine operations.")

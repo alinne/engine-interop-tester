@@ -30,7 +30,8 @@ remains enabled, redirects are rejected, environment proxies are disabled, and r
 
 1. Check Google OAuth application readiness through Engine.
 2. Start Engine-owned authorization, follow the validated Google consent link, return here and check
-   the Engine-owned callback result. No callback or token exchange is performed by this app.
+   the Engine-owned callback result. A fixed loopback return relays the callback to Engine;
+   this app performs no provider token exchange.
 3. Load the owner's operational Google Drive connections. A callback's connected record alone is not
    treated as proof that the operational connection registry is ready.
 4. Select a connection and list folders and files using Engine's currently available legacy routes.
@@ -45,7 +46,7 @@ Those disabled/unavailable paths are requirements, not completed implementation.
 
 ## Contract authority and proof
 
-`src/drive-diagnostics/contracts.json` is a generated consumer projection of six Engine route
+`src/drive-diagnostics/contracts.json` is a generated consumer projection of seven Engine route
 declarations. It retains the selected source commit and SHA-256 for the three source files. Refresh
 only from committed Engine source, review the projection, then run:
 
@@ -113,3 +114,36 @@ projection comparison against the selected committed Engine source. Desktop (128
 (390 px) browser inspection passed, including an actual click returning
 `diagnostic_configuration_required` with no configured Engine. No Google account or credentials were
 used. This proves the diagnostic baseline, not the unfinished Engine capabilities or live readiness.
+
+## Reusable Google test registration
+
+Use a dedicated Google Cloud project and an External/Testing consent configuration, separate from
+Vault's eventual production registration. Enable Drive API and declare only
+`https://www.googleapis.com/auth/drive.readonly` for complete accessible-folder browsing and downloads.
+Add approved testers to the test-user list. Google Testing authorizations expire after seven days;
+re-authorize when required. Do not publish the consent app as part of local testing.
+
+Create a **Web application** OAuth client named `External Connections Local Diagnostic` with exactly
+`http://127.0.0.1:8765/oauth/callback/google-drive` as its authorized redirect URI. No JavaScript origin
+is needed: the browser never holds the client secret. Keep the downloaded credentials in the existing
+private runtime configuration store, outside Git and evidence. Bind Engine's `CloudConnections:OAuthApps`
+registration to product `engine-interop-tester`, environment `local`, provider `google-drive`, this
+client ID/secret, the exact redirect URI and read-only scope. Vault must use its own registration later.
+
+The HTTP return is restricted to loopback. Ordinary UI/action routes retain strict cookie, Origin,
+CSRF and cross-site checks. Only the fixed callback path accepts a cross-site top-level navigation;
+it checks the exact Host, bounds and de-duplicates query fields, and passes only state/code/error to
+the current Engine connection. Engine-issued state must match the current in-memory sign-in attempt
+and is consumed before forwarding, including on an unknown transport outcome. Starting another
+sign-in invalidates the previous callback. A failed/unknown callback requires a new sign-in; it is
+never retried automatically. Engine still validates provider state, PKCE, expiry and credentials.
+The callback sets no session cookie and returns fixed text without provider data. Access logs are
+suppressed. Engine transport retains normal TLS validation and any configured certificate pin.
+
+Google permits HTTP loopback redirects for web-app testing:
+<https://developers.google.com/identity/protocols/oauth2/web-server>.
+Testing limits: <https://support.google.com/cloud/answer/15549945?hl=en>.
+This registration and synthetic callback proof do not establish live Drive qualification.
+
+Use HTTPS with normal certificate validation and an explicit certificate pin for live OAuth
+communication with Engine. HTTP loopback support exists for synthetic local tests only.
