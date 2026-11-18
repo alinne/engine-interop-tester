@@ -122,6 +122,11 @@ class DriveClient:
             if action in {"import", "download", "open", "acquire"}:
                 return {"action": action, "isSuccess": False, "reasonCodes": ["capability_unavailable"]}
             raise DriveClientError("unsupported_drive_action")
+        if action == "start":
+            # Starting over may select another Google account. Invalidate the
+            # previous attempt before any fallible contract or network work.
+            self._state = None
+            self._clear_connection_bindings()
         operation = self._operation(action)
         body: dict[str, Any] | None = None
         query: dict[str, str] = {}

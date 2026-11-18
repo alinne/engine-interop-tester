@@ -67,7 +67,9 @@ remains a failure. The new consumer uses contract bindings because the selected 
 these operations; SDK parity remains Engine-owned work.
 
 The local action schema is presentation-only. Requests inject the fixed configured owner scope;
-connections and collections must have been returned for that scope and connection. Browser input
+connections and collections must have been returned for that scope and connection. Starting a new
+sign-in clears previous OAuth state, consent links and account selections before any fallible work;
+failed sign-in attempts cannot reuse the previous account bindings. Browser input
 cannot select a different tenant, Engine origin, bearer token, OAuth state, route or HTTP method.
 The UI displays allowlisted fields without HTML interpolation. No request/response files are saved.
 
@@ -106,7 +108,7 @@ no paid-service execution route. Operation evidence/replay remains the complianc
 
 ## November 18 baseline checks
 
-The focused verifier passed 30 synthetic tests, JavaScript syntax, consumer-boundary checks and
+The focused verifier passed 32 synthetic tests, JavaScript syntax, consumer-boundary checks and
 projection comparison against the selected committed Engine source. Desktop (1280 px) and mobile
 (390 px) browser inspection passed, including an actual click returning
 `diagnostic_configuration_required` with no configured Engine. No Google account or credentials were

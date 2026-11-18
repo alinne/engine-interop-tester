@@ -70,6 +70,12 @@ function render(action, data) {
   if (action === "assets" || action === "collections") byId("pagination").hidden = !(data.hasMore || data.changeCursor || data.nextPageToken || data.continuationToken || data.incomplete);
 }
 async function run(action, payload = {}) {
+  if (action === "start") {
+    resetFolders();
+    fillSelect("connection", [], "connectionId", "connectionId");
+    byId("consent").hidden = true;
+    byId("consent").removeAttribute("href");
+  }
   const buttons = document.querySelectorAll("button, select");
   buttons.forEach(button => button.disabled = true);
   byId("status").textContent = "Waiting for Engine…";

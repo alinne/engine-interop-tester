@@ -156,6 +156,28 @@ class DriveClientTests(unittest.TestCase):
         self.assertTrue(EngineHandler.consumer_ids)
         self.assertTrue(all(value == "consumer-test" for value in EngineHandler.consumer_ids))
 
+    def test_new_authorization_attempt_invalidates_previous_account_bindings(self):
+        for outcome in ("success", "semantic-failure", "transport-failure"):
+            with self.subTest(outcome=outcome):
+                EngineHandler.mode = "happy"
+                client = self.client()
+                client.execute("start")
+                client.execute("connections")
+                client.execute("collections", {"connectionId": "conn-1"})
+                if outcome == "transport-failure":
+                    with mock.patch.object(client, "_request", side_effect=DriveClientError("engine_unreachable")):
+                        with self.assertRaisesRegex(DriveClientError, "engine_unreachable"):
+                            client.execute("start")
+                else:
+                    EngineHandler.mode = "semantic-fail" if outcome == "semantic-failure" else "happy"
+                    self.assertEqual(outcome == "success", client.execute("start")["isSuccess"])
+                before = len(EngineHandler.calls)
+                if outcome != "success":
+                    self.assertEqual(["authorization_not_started"], client.execute("status")["reasonCodes"])
+                with self.assertRaisesRegex(DriveClientError, "unknown_connection_reference"):
+                    client.execute("assets", {"connectionId": "conn-1", "collectionRef": "folder-1"})
+                self.assertEqual(before, len(EngineHandler.calls))
+
     def test_actual_engine_readiness_and_connection_dtos_normalize_on_2xx(self):
         EngineHandler.mode = "actual-shape"
         client = self.client()
