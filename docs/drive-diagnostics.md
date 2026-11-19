@@ -59,11 +59,10 @@ remains enabled, redirects are rejected, environment proxies are disabled, and r
    preserves the original Engine reason instead of being rewritten as a local binding mismatch.
 7. Revoke a selected connection only after an explicit confirmation.
 
-The pinned committed Engine contract currently projects 22 operations, including graph prepare,
-submit, status, cancel and retained-artifact access. The next committed Engine projection adds the
-canonical graph-watch route as operation 23. Keep the current projection pinned until the parent
-supplies the final Engine contract commit; do not refresh it from an uncommitted or interim Engine
-checkout. An unavailable host capability remains `capability_unavailable`;
+The pinned committed Engine contract projects 23 operations, including graph prepare, submit,
+status, watch, cancel and retained-artifact access. Refresh the projection only from the reviewed
+committed Engine source and keep its source commit and hashes together. An unavailable host
+capability remains `capability_unavailable`;
 projected routes do not prove runtime qualification. Verified reads are consumed server-side with
 bounded streaming and return only a byte count and SHA-256 hash. The diagnostic never renders medical content or
 implements ISO/DICOM parsing; those remain consumer application responsibilities.
