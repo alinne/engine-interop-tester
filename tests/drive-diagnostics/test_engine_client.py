@@ -488,6 +488,41 @@ class DriveClientTests(unittest.TestCase):
                 self.assertNotIn("secret", json.dumps(result))
                 self.assertNotIn("providerId", result)
 
+    def test_reconciliation_error_has_only_fixed_retry_projection(self):
+        result = client_module._project_http_error(
+            json.dumps({
+                "reasonCode": "external_media_reconciliation_required",
+                "reconciliationRequired": False,
+                "retryable": True,
+                "message": "secret detail",
+                "extensions": {"token": "secret-token"},
+            }).encode("utf-8"),
+            409,
+        )
+        self.assertFalse(result["isSuccess"])
+        self.assertEqual(["external_media_reconciliation_required"], result["reasonCodes"])
+        self.assertTrue(result["reconciliationRequired"])
+        self.assertFalse(result["retryable"])
+        self.assertNotIn("message", result)
+        self.assertNotIn("extensions", result)
+
+        EngineHandler.mode = "http-error"
+        EngineHandler.http_error_status = 409
+        EngineHandler.http_error_payload = {
+            "reasonCode": "external_media_reconciliation_required",
+            "isSuccess": True,
+            "reconciliationRequired": False,
+            "retryable": True,
+            "unknown": {"secret": "must-not-leak"},
+        }
+        response = self.client().execute("readiness")
+        self.assertFalse(response["isSuccess"])
+        self.assertEqual(["external_media_reconciliation_required"], response["reasonCodes"])
+        self.assertTrue(response["reconciliationRequired"])
+        self.assertFalse(response["retryable"])
+        self.assertNotIn("unknown", response)
+        self.assertNotIn("secret", json.dumps(response))
+
     def test_http_error_rejects_unknown_nested_and_body_status_fields(self):
         EngineHandler.mode = "http-error"
         EngineHandler.http_error_status = 409

@@ -54,7 +54,10 @@ _ACTION_ALIASES = {
     "release": ("release", "tombstone"),
 }
 _LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1"}
-_SAFE_STATUS_KEYS = {"providerId", "state", "status", "isSuccess", "reasonCodes", "expiresAtUtc", "httpStatus"}
+_SAFE_STATUS_KEYS = {
+    "providerId", "state", "status", "isSuccess", "reasonCodes", "expiresAtUtc", "httpStatus",
+    "reconciliationRequired", "retryable",
+}
 _PUBLIC_GRAPH_ADMISSION_REASON_CODES = frozenset((
     "external_media_graph_execute_right_missing",
     "external_media_trust_unavailable",
@@ -64,6 +67,9 @@ _PUBLIC_GRAPH_ADMISSION_REASON_CODES = frozenset((
     "graph_execution_ticket_authorization_denied",
     "graph_execution_ticket_evidence_author_unavailable",
     "graph_execution_ticket_plan_not_admitted",
+    "external_media_admitted_invocation_conflict",
+    "external_media_terminal_replay_unavailable",
+    "external_media_reconciliation_required",
 ))
 
 
@@ -91,6 +97,11 @@ def _project_http_error(data: bytes, status: int) -> dict[str, Any]:
     reason_code = parsed.get("reasonCode")
     if type(reason_code) is str and reason_code in _PUBLIC_GRAPH_ADMISSION_REASON_CODES:
         output["reasonCodes"] = [reason_code]
+        if reason_code == "external_media_reconciliation_required":
+            # This route's recovery contract is fixed: callers must reconcile
+            # before retrying, regardless of untrusted body extensions.
+            output["reconciliationRequired"] = True
+            output["retryable"] = False
     return output
 
 
