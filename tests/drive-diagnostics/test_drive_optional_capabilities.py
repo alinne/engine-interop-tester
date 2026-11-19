@@ -120,6 +120,156 @@ class OptionalDriveCapabilityTests(unittest.TestCase):
         self.assertEqual("opaque-cursor", request.call_args.kwargs["body"]["location"]["continuationToken"])
         self.assertEqual("shared_with_me", request.call_args.kwargs["body"]["location"]["locationKind"])
 
+    def test_browse_projects_only_canonical_download_capability_from_metadata(self):
+        response = {
+            "isSuccess": True,
+            "items": [
+                {"displayName": "blocked.bin", "mimeType": "application/octet-stream",
+                 "metadata": {"driveCanDownload": "false", "providerSecret": "must-not-leak"}},
+                {"displayName": "allowed.bin", "mimeType": "application/octet-stream",
+                 "metadata": {"driveCanDownload": "true"}},
+                {"displayName": "unknown.bin", "mimeType": "application/octet-stream",
+                 "metadata": {"driveCanDownload": "maybe"}},
+            ],
+        }
+        with mock.patch.object(self.client, "_request", return_value=response):
+            result = self.client.execute("browse", {"connectionId": "conn-1", "locationKind": "my_drive_root"})
+        assets = result["items"]
+        self.assertEqual(False, assets[0]["canDownload"])
+        self.assertEqual(True, assets[1]["canDownload"])
+        self.assertNotIn("canDownload", assets[2])
+        self.assertNotIn("metadata", json.dumps(result))
+        self.assertNotIn("providerSecret", json.dumps(result))
+
+    def test_browse_normalizes_canonical_nested_result_and_preserves_inner_failure(self):
+        success = {
+            "httpStatus": 200,
+            "isSuccess": True,
+            "connectionId": "conn-1",
+            "result": {
+                "isSuccess": True,
+                "collections": [{"collectionRef": "folder-nested", "displayName": "Shared"}],
+                "assets": [{"assetId": "asset-nested", "displayName": "study.dcm"}],
+                "continuationToken": "cursor-nested",
+            },
+        }
+        with mock.patch.object(self.client, "_request", return_value=success):
+            result = self.client.execute("browse", {"connectionId": "conn-1", "locationKind": "my_drive_root"})
+        self.assertTrue(result["isSuccess"])
+        self.assertEqual("folder-nested", result["collections"][0]["collectionRef"])
+        self.assertEqual("asset-nested", result["assets"][0]["assetId"])
+        self.assertEqual("cursor-nested", result["continuationToken"])
+
+        failure = {
+            "httpStatus": 200,
+            "isSuccess": True,
+            "connectionId": "conn-1",
+            "result": {"isSuccess": False, "reasonCodes": ["cloud_collection_access_denied"]},
+        }
+        with mock.patch.object(self.client, "_request", return_value=failure):
+            result = self.client.execute("browse", {"connectionId": "conn-1", "locationKind": "my_drive_root"})
+        self.assertFalse(result["isSuccess"])
+        self.assertEqual(["cloud_collection_access_denied"], result["reasonCodes"])
+        self.assertNotIn("collections", result)
+
+        conflict = {
+            "httpStatus": 200,
+            "isSuccess": True,
+            "connectionId": "conn-1",
+            "result": {
+                "isSuccess": True,
+                "connectionId": "conn-2",
+                "collections": [],
+                "assets": [],
+            },
+        }
+        with mock.patch.object(self.client, "_request", return_value=conflict):
+            result = self.client.execute("browse", {"connectionId": "conn-1", "locationKind": "my_drive_root"})
+        self.assertFalse(result["isSuccess"])
+        self.assertEqual(["engine_response_invalid"], result["reasonCodes"])
+
+    def test_direct_canonical_browse_cloud_selection_roundtrips_with_account_binding(self):
+        cloud_selection = "cloud-selection:conn-1:asset-direct"
+        response = {
+            "httpStatus": 200,
+            "isSuccess": True,
+            "connectionId": "conn-1",
+            "result": {
+                "isSuccess": True,
+                "collections": [{"collectionRef": "folder-direct", "displayName": "Shared"}],
+                "assets": [{"assetId": cloud_selection, "displayName": "study.dcm"}],
+            },
+        }
+        with mock.patch.object(self.client, "_request", side_effect=[response, {"isSuccess": True}]) as request:
+            result = self.client.execute("browse", {
+                "connectionId": "conn-1", "locationKind": "my_drive_root",
+            })
+            self.assertTrue(result["isSuccess"])
+            self.assertIn(cloud_selection, self.client._selection_refs["conn-1"])
+            self.assertIn("folder-direct", self.client._collection_ids["conn-1"])
+            self.client.execute("acquire", {
+                "connectionId": "conn-1", "assetId": cloud_selection, "artifactId": "artifact-direct",
+                "maximumBytes": 1000, "publication": {
+                    "fileName": "study.dcm", "role": "source", "kind": "SourceMedia",
+                    "classification": "Restricted", "subjectIds": [], "allowedPurposes": ["diagnostic"],
+                    "consentRequiredPurposes": [], "retentionPolicyId": "policy:test",
+                    "retentionClass": "Tier1_Operational", "idempotencyKey": "attempt-direct",
+                },
+            })
+        self.assertEqual(cloud_selection, request.call_args.kwargs["body"]["selectionRef"])
+
+        self.client._connection_ids = {"conn-1", "conn-2"}
+        with self.assertRaisesRegex(DriveClientError, "unknown_asset_reference"):
+            self.client.execute("acquire", {
+                "connectionId": "conn-2", "assetId": cloud_selection, "artifactId": "artifact-cross-account",
+                "maximumBytes": 1000, "publication": {
+                    "fileName": "study.dcm", "role": "source", "kind": "SourceMedia",
+                    "classification": "Restricted", "subjectIds": [], "allowedPurposes": ["diagnostic"],
+                    "consentRequiredPurposes": [], "retentionPolicyId": "policy:test",
+                    "retentionClass": "Tier1_Operational", "idempotencyKey": "attempt-cross-account",
+                },
+            })
+
+    def test_browse_rejects_malformed_canonical_success_envelope(self):
+        response = {
+            "httpStatus": 200, "isSuccess": True, "connectionId": "conn-1", "result": {"assets": []},
+        }
+        with mock.patch.object(self.client, "_request", return_value=response):
+            result = self.client.execute("browse", {"connectionId": "conn-1", "locationKind": "my_drive_root"})
+        self.assertFalse(result["isSuccess"])
+        self.assertEqual(["engine_response_invalid"], result["reasonCodes"])
+
+    def test_acquire_projects_nested_publication_record_artifact(self):
+        self.client._selection_refs["conn-1"] = {"selection-1"}
+        response = {
+            "httpStatus": 200,
+            "isSuccess": True,
+            "connectionId": "conn-1",
+            "publication": {
+                "record": {
+                    "artifactId": {"value": "artifact-nested"},
+                    "contentSha256": "a" * 64,
+                    "sizeBytes": 4096,
+                    "contentType": "application/dicom",
+                },
+                "contentDeduplicated": False,
+                "reasonCode": "published",
+            },
+        }
+        with mock.patch.object(self.client, "_request", return_value=response):
+            result = self.client.execute("acquire", {
+                "connectionId": "conn-1", "selectionRef": "selection-1", "artifactId": "requested",
+                "maximumBytes": 1000, "publication": {
+                    "fileName": "study.dcm", "role": "source", "kind": "SourceMedia",
+                    "classification": "Restricted", "subjectIds": [], "allowedPurposes": ["diagnostic"],
+                    "consentRequiredPurposes": [], "retentionPolicyId": "policy:test",
+                    "retentionClass": "Tier1_Operational", "idempotencyKey": "attempt-nested",
+                },
+            })
+        self.assertTrue(result["isSuccess"])
+        self.assertEqual("artifact-nested", result["retainedArtifactId"])
+        self.assertEqual("artifact-nested", self.client._artifact_ids["conn-1"].pop())
+
     def test_acquire_requires_asset_returned_by_browse_and_never_auto_acquires(self):
         with mock.patch.object(self.client, "_request", return_value={"isSuccess": True, "items": [{"selectionRef": "selection-1"}]}) as request:
             self.client.execute("browse", {"connectionId": "conn-1", "locationKind": "my_drive_root"})
@@ -139,21 +289,87 @@ class OptionalDriveCapabilityTests(unittest.TestCase):
         self.assertEqual("/engine/v1/cloud/media:acquire-retained", request.call_args.args[1])
         self.assertEqual("selection-1", request.call_args.kwargs["body"]["selectionRef"])
         self.assertEqual({"value": "artifact-1"}, request.call_args.kwargs["body"]["artifactId"])
+        self.assertEqual(1, request.call_args.kwargs["body"]["publication"]["kind"])
         self.assertNotIn("assetId", request.call_args.kwargs["body"])
         self.assertTrue(acquired["isSuccess"])
 
+    def test_publication_kind_accepts_only_source_media_numeric_wire_value(self):
+        valid = {
+            "connectionId": "conn-1", "selectionRef": "selection-1", "artifactId": "artifact-kind",
+            "maximumBytes": 1000, "publication": {
+                "fileName": "study.dcm", "role": "source", "kind": "SourceMedia",
+                "classification": "Restricted", "subjectIds": [], "allowedPurposes": ["diagnostic"],
+                "consentRequiredPurposes": [], "retentionPolicyId": "policy:test",
+                "retentionClass": "Tier1_Operational", "idempotencyKey": "attempt-kind",
+            },
+        }
+        with mock.patch.object(self.client, "_request", return_value={"isSuccess": True}) as request:
+            self.client._selection_refs["conn-1"] = {"selection-1"}
+            self.client.execute("acquire", valid)
+        self.assertEqual(1, request.call_args.kwargs["body"]["publication"]["kind"])
+
+        for invalid_kind in ("DevelopedImage", 2, True):
+            with self.subTest(invalid_kind=invalid_kind):
+                invalid = {**valid, "publication": {**valid["publication"], "kind": invalid_kind}}
+                with self.assertRaisesRegex(DriveClientError, "publication_metadata_invalid"):
+                    self.client.execute("acquire", invalid)
+
     def test_revoke_and_artifact_routes_replace_only_bound_opaque_refs(self):
-        with mock.patch.object(self.client, "_request", return_value={"isSuccess": True, "retainedArtifactId": "artifact-1"}) as request:
+        self.client._artifact_ids = {"conn-1": {"artifact-1"}}
+        with mock.patch.object(self.client, "_request", side_effect=[
+            {"isSuccess": True, "retainedArtifactId": "artifact-1"},
+            {"isSuccess": True},
+        ]) as request:
+            inspected = self.client.execute("inspect", {"connectionId": "conn-1", "retainedArtifactId": "artifact-1"})
             result = self.client.execute("revoke", {"connectionId": "conn-1"})
-            self.assertTrue(result["isSuccess"])
-            self.client._artifact_ids = {"conn-1": {"artifact-1"}}
-            self.client.execute("inspect", {"connectionId": "conn-1", "retainedArtifactId": "artifact-1"})
-        self.assertEqual("/engine/v1/media/artifacts/artifact-1", request.call_args.args[1])
-        self.assertIsNone(request.call_args.kwargs["body"])
+        self.assertTrue(inspected["isSuccess"])
+        self.assertTrue(result["isSuccess"])
+        self.assertEqual("/engine/v1/media/artifacts/artifact-1", request.call_args_list[0].args[1])
+        self.assertEqual("/engine/v1/cloud/connections/conn-1/revoke", request.call_args_list[1].args[1])
+        self.assertIsNone(request.call_args_list[1].kwargs["body"])
 
         self.client._connection_ids = {"other-account-connection"}
         with self.assertRaisesRegex(DriveClientError, "unknown_connection_reference"):
             self.client.execute("revoke", {"connectionId": "conn-1"})
+
+    def test_successful_revoke_invalidates_all_local_connection_and_graph_refs(self):
+        self.client._collection_ids = {"conn-1": {"folder-1"}}
+        self.client._asset_ids = {"conn-1": {"asset-1"}}
+        self.client._selection_refs = {"conn-1": {"selection-1"}}
+        self.client._artifact_ids = {"conn-1": {"artifact-1"}}
+        self.client._graph_bindings = {
+            "browse": {"connectionId": "conn-1", "scopeId": "scope-1"},
+            "acquire": {"connectionId": "conn-1", "scopeId": "scope-2"},
+        }
+        with mock.patch.object(self.client, "_request", return_value={"isSuccess": True}):
+            result = self.client.execute("revoke", {"connectionId": "conn-1"})
+        self.assertTrue(result["isSuccess"])
+        self.assertEqual(set(), self.client._connection_ids)
+        self.assertEqual({}, self.client._collection_ids)
+        self.assertEqual({}, self.client._asset_ids)
+        self.assertEqual({}, self.client._selection_refs)
+        self.assertEqual({}, self.client._artifact_ids)
+        self.assertEqual({}, self.client._graph_bindings)
+        with self.assertRaisesRegex(DriveClientError, "unknown_connection_reference"):
+            self.client.execute("browse", {"connectionId": "conn-1", "locationKind": "my_drive_root"})
+
+    def test_failed_revoke_preserves_local_connection_and_graph_refs(self):
+        self.client._collection_ids = {"conn-1": {"folder-1"}}
+        self.client._asset_ids = {"conn-1": {"asset-1"}}
+        self.client._selection_refs = {"conn-1": {"selection-1"}}
+        self.client._artifact_ids = {"conn-1": {"artifact-1"}}
+        self.client._graph_bindings = {"browse": {"connectionId": "conn-1", "scopeId": "scope-1"}}
+        with mock.patch.object(self.client, "_request", return_value={
+            "isSuccess": False, "reasonCodes": ["revoke_failed"],
+        }):
+            result = self.client.execute("revoke", {"connectionId": "conn-1"})
+        self.assertFalse(result["isSuccess"])
+        self.assertEqual({"conn-1"}, self.client._connection_ids)
+        self.assertEqual({"conn-1": {"folder-1"}}, self.client._collection_ids)
+        self.assertEqual({"conn-1": {"asset-1"}}, self.client._asset_ids)
+        self.assertEqual({"conn-1": {"selection-1"}}, self.client._selection_refs)
+        self.assertEqual({"conn-1": {"artifact-1"}}, self.client._artifact_ids)
+        self.assertEqual({"browse": {"connectionId": "conn-1", "scopeId": "scope-1"}}, self.client._graph_bindings)
 
     def test_artifact_inspect_uses_query_context_and_no_json_body(self):
         self.client._artifact_ids = {"conn-1": {"artifact-1"}}
@@ -510,6 +726,70 @@ class OptionalDriveCapabilityTests(unittest.TestCase):
         self.assertNotIn("rawRef", json.dumps(result))
         self.assertNotIn("providerPath", json.dumps(result))
         self.assertIn("selection-graph", self.client._selection_refs["conn-1"])
+
+    def test_graph_browse_cloud_selection_and_folder_refs_round_trip_to_acquire(self):
+        invocation = "z" * 64
+        prepare = {"isSuccess": True, "invocationRef": invocation, "scopeId": "scope-roundtrip",
+                   "rootJobId": "job-roundtrip", "graphHash": "q" * 64, "expiresUtc": "2026-11-19T20:00:00Z"}
+        cloud_selection = "cloud-selection:conn-1:asset-1"
+        submit = {
+            "isSuccess": True, "invocationRef": invocation, "scopeId": "scope-roundtrip",
+            "rootJobId": "job-roundtrip", "graphHash": "q" * 64, "status": "Completed",
+            "output": {
+                "isSuccess": True, "connectionId": "conn-1",
+                "result": {
+                    "isSuccess": True,
+                    "collections": [{"collectionRef": "folder-1", "displayName": "Shared", "driveId": "drive-1"}],
+                    "assets": [{"assetId": cloud_selection, "displayName": "study.dcm",
+                                "mimeType": "application/dicom", "sizeBytes": 64}],
+                },
+            },
+        }
+        with mock.patch.object(self.client, "_request", side_effect=[prepare, submit, {"isSuccess": True}, {"isSuccess": True}]) as request:
+            self.client.execute("graphPrepareBrowse", {"connectionId": "conn-1", "locationKind": "my_drive_root"})
+            result = self.client.execute("graphSubmitBrowse", {"graphKind": "browse"})
+            self.assertTrue(result["isSuccess"])
+            self.assertIn("folder-1", self.client._collection_ids["conn-1"])
+            self.assertIn(cloud_selection, self.client._asset_ids["conn-1"])
+            self.assertIn(cloud_selection, self.client._selection_refs["conn-1"])
+
+            self.client.execute("assets", {"connectionId": "conn-1", "collectionRef": "folder-1"})
+            acquire = self.client.execute("graphPrepareAcquire", {
+                "connectionId": "conn-1", "assetId": cloud_selection, "artifactId": "artifact-roundtrip",
+                "maximumBytes": 1000, "publication": {
+                    "fileName": "study.dcm", "role": "source", "kind": "SourceMedia",
+                    "classification": "Restricted", "subjectIds": [], "allowedPurposes": ["diagnostic"],
+                    "consentRequiredPurposes": [], "retentionPolicyId": "policy:test",
+                    "retentionClass": "Tier1_Operational", "idempotencyKey": "attempt-roundtrip",
+                },
+            })
+        self.assertTrue(acquire["isSuccess"])
+        self.assertEqual("folder-1", request.call_args_list[2].kwargs["body"]["collectionRef"])
+        self.assertEqual(cloud_selection, request.call_args_list[3].kwargs["body"]["selectionRef"])
+
+    def test_graph_browse_rejects_malformed_page_shape_or_conflicting_connection(self):
+        invocation = "m" * 64
+        prepare = {"isSuccess": True, "invocationRef": invocation, "scopeId": "scope-shape",
+                   "rootJobId": "job-shape", "graphHash": "s" * 64, "expiresUtc": "2026-11-19T20:00:00Z"}
+        for page in (
+            {"isSuccess": True, "collections": {}, "assets": []},
+            {"isSuccess": True, "connectionId": "conn-2", "collections": [], "assets": []},
+        ):
+            with self.subTest(page=page):
+                client = DriveClient(self.client.config, self.contracts.name)
+                client._connection_ids = {"conn-1"}
+                submit = {
+                    "isSuccess": True, "invocationRef": invocation, "scopeId": "scope-shape",
+                    "rootJobId": "job-shape", "graphHash": "s" * 64, "status": "Completed",
+                    "output": {"isSuccess": True, "connectionId": "conn-1", "result": page},
+                }
+                with mock.patch.object(client, "_request", side_effect=[prepare, submit]):
+                    client.execute("graphPrepareBrowse", {"connectionId": "conn-1", "locationKind": "my_drive_root"})
+                    result = client.execute("graphSubmitBrowse", {"graphKind": "browse"})
+                self.assertFalse(result["isSuccess"])
+                self.assertEqual(["graph_binding_mismatch"], result["reasonCodes"])
+                self.assertNotIn("collections", result)
+                self.assertNotIn("assets", result)
 
     def test_graph_submit_http_failure_preserves_sanitized_reason_and_requires_reconciliation(self):
         invocation = "h" * 64

@@ -328,13 +328,27 @@ class DriveClient:
             self._callback_state = state
         elif action == "connections" and result.get("isSuccess"):
             self._remember_connections(result)
+        elif action == "revoke" and result.get("isSuccess"):
+            # Revocation is a binding boundary.  Do not let a later UI request
+            # reuse cached connection, selection, retained-artifact, or graph
+            # handles after the provider connection has been revoked.
+            self._clear_connection_bindings()
         elif action == "collections" and result.get("isSuccess"):
             result = {**result, "connectionId": self._last_collection_connection}
             self._remember_collections(result, self._last_collection_connection)
         elif action in {"assets", "browse"} and result.get("isSuccess"):
             if action == "browse":
                 self._remember_collections(result, selected_connection)
-            self._remember_assets(result, selected_connection)
+            self._remember_assets(
+                result,
+                selected_connection,
+                # The canonical browse route can expose the same opaque
+                # cloud-selection asset handle as graph browse.  The strict
+                # prefix check prevents arbitrary provider IDs from being
+                # promoted, while the connection binding keeps account
+                # switching isolated.
+                allow_cloud_selection_asset_id=action == "browse",
+            )
         elif action in {"acquire", "materialize"} and result.get("isSuccess"):
             self._remember_artifacts(result, selected_connection)
         elif action in {"graphPrepareBrowse", "graphPrepareAcquire"} and result.get("isSuccess"):
@@ -344,7 +358,13 @@ class DriveClient:
             if action == "graphSubmitBrowse" and result.get("isSuccess"):
                 binding = self._graph_bindings.get("browse")
                 if binding is not None:
-                    self._remember_assets(result, binding.get("connectionId"))
+                    connection_id = binding.get("connectionId")
+                    # Graph browse output is the Engine-authorized source for
+                    # the canonical cloud-selection asset handle. Keep folder
+                    # refs as well so the next bounded folder listing can use
+                    # the same account binding.
+                    self._remember_collections(result, connection_id)
+                    self._remember_assets(result, connection_id, allow_cloud_selection_asset_id=True)
         elif action in {"graphStatus", "graphWatch"}:
             self._remember_graph_status(result)
         result.pop("_graphBindingVerified", None)
@@ -370,10 +390,72 @@ class DriveClient:
 
     @staticmethod
     def _normalize_published_shape(action: str, result: Mapping[str, Any]) -> dict[str, Any]:
-        """Normalize only the two published 2xx DTOs that omit ``isSuccess``."""
+        """Normalize published DTOs before their safe consumer projection."""
         normalized = dict(result)
         status = result.get("httpStatus")
         if not isinstance(status, int) or not 200 <= status < 300:
+            return normalized
+        if action == "browse" and "result" in result:
+            nested = result.get("result")
+            if type(result.get("isSuccess")) is not bool or not isinstance(nested, Mapping):
+                return {"isSuccess": False, "reasonCodes": ["engine_response_invalid"], "httpStatus": status}
+            nested_success = nested.get("isSuccess")
+            if type(nested_success) is not bool:
+                return {"isSuccess": False, "reasonCodes": ["engine_response_invalid"], "httpStatus": status}
+            if result.get("isSuccess") is not True or nested_success is not True:
+                reasons = _reason_codes(nested.get("reasonCodes")) or _reason_codes(result.get("reasonCodes"))
+                return {
+                    "isSuccess": False,
+                    "reasonCodes": reasons or ["engine_response_invalid"],
+                    "httpStatus": status,
+                }
+            if (not isinstance(nested.get("collections"), list)
+                    or not isinstance(nested.get("assets"), list)):
+                return {"isSuccess": False, "reasonCodes": ["engine_response_invalid"], "httpStatus": status}
+            outer_connection = result.get("connectionId")
+            nested_connection = nested.get("connectionId")
+            if (isinstance(outer_connection, str) and isinstance(nested_connection, str)
+                    and outer_connection != nested_connection):
+                return {"isSuccess": False, "reasonCodes": ["engine_response_invalid"], "httpStatus": status}
+            normalized = {key: value for key, value in result.items() if key != "result"}
+            normalized.update(nested)
+            normalized["isSuccess"] = True
+            normalized["reasonCodes"] = _reason_codes(nested.get("reasonCodes"))
+            return normalized
+        if action == "acquire" and "publication" in result:
+            publication = result.get("publication")
+            if type(result.get("isSuccess")) is not bool or not isinstance(publication, Mapping):
+                return {"isSuccess": False, "reasonCodes": ["engine_response_invalid"], "httpStatus": status}
+            if result.get("isSuccess") is not True:
+                reasons = _reason_codes(result.get("reasonCodes")) or _reason_codes(publication.get("reasonCodes"))
+                return {
+                    "isSuccess": False,
+                    "reasonCodes": reasons or ["engine_response_invalid"],
+                    "httpStatus": status,
+                }
+            record = publication.get("record")
+            if not isinstance(record, Mapping):
+                return {"isSuccess": False, "reasonCodes": ["engine_response_invalid"], "httpStatus": status}
+            artifact_id = _canonical_artifact_value(record.get("artifactId"))
+            if not isinstance(artifact_id, str) or not artifact_id or not _valid_opaque_artifact_id(artifact_id):
+                return {"isSuccess": False, "reasonCodes": ["engine_response_invalid"], "httpStatus": status}
+            # Keep only the bounded publication fields the diagnostic app can
+            # use; the full lifecycle record remains Engine-owned.
+            safe_publication: dict[str, Any] = {"artifactId": artifact_id}
+            for source, target in (("contentSha256", "contentSha256"), ("contentType", "contentType"),
+                                   ("sizeBytes", "byteSize"), ("reasonCode", "reasonCode")):
+                value = record.get(source)
+                if value is None:
+                    value = publication.get(source)
+                if isinstance(value, str) and len(value) <= 512:
+                    safe_publication[target] = value
+                elif source == "sizeBytes" and type(value) is int and value >= 0:
+                    safe_publication[target] = value
+            normalized = {key: value for key, value in result.items() if key != "publication"}
+            normalized["publication"] = safe_publication
+            normalized["retainedArtifactId"] = artifact_id
+            normalized["isSuccess"] = True
+            normalized["reasonCodes"] = _reason_codes(result.get("reasonCodes"))
             return normalized
         # Graph lifecycle DTOs are authoritative even if a legacy/proxy
         # response also carries an optimistic isSuccess field.  Do not let an
@@ -1085,8 +1167,13 @@ class DriveClient:
             page = graph_output.get("result")
             if not isinstance(page, Mapping) or page.get("isSuccess") is not True:
                 return output
-            collections = [_safe_record(item) for item in page.get("collections", []) if isinstance(item, Mapping)] if isinstance(page.get("collections"), list) else []
-            assets = [_safe_record(item) for item in page.get("assets", []) if isinstance(item, Mapping)] if isinstance(page.get("assets"), list) else []
+            if (isinstance(page.get("connectionId"), str)
+                    and page.get("connectionId") != connection_id):
+                return self._graph_binding_failure(output)
+            if not isinstance(page.get("collections"), list) or not isinstance(page.get("assets"), list):
+                return self._graph_binding_failure(output)
+            collections = [_safe_record(item) for item in page["collections"] if isinstance(item, Mapping)]
+            assets = [_safe_record(item) for item in page["assets"] if isinstance(item, Mapping)]
             output["graphOutput"] = {"kind": "browse", "connectionId": connection_id,
                                      "collections": collections, "assets": assets}
             output["collections"] = collections
@@ -1252,7 +1339,8 @@ class DriveClient:
                 if isinstance(ref, str):
                     refs.add(ref)
 
-    def _remember_assets(self, result: Mapping[str, Any], connection_id: str | None) -> None:
+    def _remember_assets(self, result: Mapping[str, Any], connection_id: str | None, *,
+                         allow_cloud_selection_asset_id: bool = False) -> None:
         if not isinstance(connection_id, str):
             return
         refs = self._asset_ids.setdefault(connection_id, set())
@@ -1265,6 +1353,13 @@ class DriveClient:
                 selection = item.get("selectionRef") or item.get("opaqueSelectionRef")
                 if isinstance(selection, str):
                     selections.add(selection)
+                elif allow_cloud_selection_asset_id and isinstance(ref, str) and _valid_cloud_selection_ref(ref):
+                    # The graph browse projection intentionally exposes only
+                    # the opaque cloud-selection assetId. Treating that
+                    # Engine-issued handle as a selection ref is safe only for
+                    # this successful, connection-bound graph response; do
+                    # not infer it from ordinary provider browse records.
+                    selections.add(ref)
 
     def _remember_artifacts(self, result: Mapping[str, Any], connection_id: str | None) -> None:
         if not isinstance(connection_id, str):
@@ -1326,6 +1421,19 @@ def _failure_reason_codes(result: Mapping[str, Any]) -> list[str]:
 def _valid_opaque_artifact_id(value: str) -> bool:
     """Keep an explicitly re-entered artifact ref path-safe and bounded."""
     return bool(re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,159}", value))
+
+
+def _canonical_artifact_value(value: Any) -> str | None:
+    if isinstance(value, str):
+        return value
+    if isinstance(value, Mapping) and set(value) == {"value"} and isinstance(value.get("value"), str):
+        return value["value"]
+    return None
+
+
+def _valid_cloud_selection_ref(value: str) -> bool:
+    """Recognize only bounded Engine-issued cloud-selection handles."""
+    return bool(re.fullmatch(r"cloud-selection:[A-Za-z0-9][A-Za-z0-9._:-]{0,255}", value))
 
 
 def _valid_graph_scope_id(value: str) -> bool:
@@ -1543,10 +1651,20 @@ def _validated_publication(value: Mapping[str, Any]) -> dict[str, Any]:
     if not isinstance(policy, Mapping) or set(policy) != {"value"} or not isinstance(policy.get("value"), str) or not policy["value"]:
         raise DriveClientError("publication_metadata_invalid")
 
+    # MediaArtifactKind is an SDK enum without a JSON string converter on the
+    # graph broker route.  Keep this diagnostic consumer intentionally narrow:
+    # SourceMedia is the only permitted import kind and its canonical wire
+    # value is numeric 1.  Do not guess or expand the provider-facing enum.
+    kind = value.get("kind")
+    if kind == "SourceMedia":
+        kind = 1
+    elif type(kind) is not int or kind != 1:
+        raise DriveClientError("publication_metadata_invalid")
+
     output: dict[str, Any] = {
         "fileName": bounded_string("fileName", 512),
         "role": bounded_string("role"),
-        "kind": bounded_string("kind", 64),
+        "kind": kind,
         "classification": bounded_string("classification", 64),
         "subjectIds": [{"value": subject} for subject in subjects],
         "allowedPurposes": string_list("allowedPurposes"),
@@ -1568,7 +1686,7 @@ def _safe_record(value: Mapping[str, Any]) -> dict[str, Any]:
     scalar_allowed = {
         "connectionId", "providerId", "signInMode", "credentialState", "state", "collectionRef", "collectionId",
         "assetId", "selectionRef", "opaqueSelectionRef", "displayName", "name", "mimeType", "sizeBytes", "modifiedAtUtc", "kind", "isReady",
-        "isConfigured", "isSignInAvailable", "version", "sha256Checksum", "md5Checksum", "canDownload",
+        "isConfigured", "isSignInAvailable", "version", "sha256Checksum", "md5Checksum",
         "isShortcut", "shortcutEligible", "driveType", "view", "locationKind", "locationRef", "driveId",
         "retainedArtifactId", "artifactId", "contentSha256", "contentType", "state", "reasonCode",
         "contentHash", "byteSize", "payloadSchemaId",
@@ -1579,6 +1697,15 @@ def _safe_record(value: Mapping[str, Any]) -> dict[str, Any]:
         for key in scalar_allowed
         if key in value and type(value[key]) in (str, int, float, bool)
     }
+    capability = value.get("canDownload")
+    if not (type(capability) is bool
+            or (isinstance(capability, str) and capability.casefold() in {"true", "false"})):
+        metadata = value.get("metadata")
+        capability = metadata.get("driveCanDownload") if isinstance(metadata, Mapping) else None
+    if type(capability) is bool:
+        output["canDownload"] = capability
+    elif isinstance(capability, str) and capability.casefold() in {"true", "false"}:
+        output["canDownload"] = capability.casefold() == "true"
     for key in ("artifactId", "retainedArtifactId"):
         candidate = value.get(key)
         if isinstance(candidate, Mapping) and set(candidate) == {"value"} and isinstance(candidate.get("value"), str):

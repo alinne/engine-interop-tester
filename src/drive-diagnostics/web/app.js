@@ -16,7 +16,7 @@ function clearResult(message = "Selection changed. Run an action to refresh the 
 }
 function clearFiles({resetBrowse = true, clearArtifact = false} = {}) {
   selected = null;
-  byId("selection").textContent = "Select one ISO or DICOM file.";
+  byId("selection").textContent = "Select one downloadable file.";
   byId("assets").replaceChildren();
   byId("pagination").hidden = true;
   byId("next-page").hidden = true;
@@ -39,6 +39,11 @@ function resetFolders({clearResult: resetResult = false} = {}) {
   byId("graph-invocation-ref").value = "";
   byId("graph-cursor").value = "";
   if (resetResult) clearResult();
+}
+function clearConnectionState() {
+  resetFolders();
+  byId("connection").replaceChildren(new Option("Load connections for this account", ""));
+  byId("connection").value = "";
 }
 function renderRetainedArtifact(record) {
   const element = byId("retained-artifact-status");
@@ -97,6 +102,7 @@ function render(action, data) {
   byId("status").dataset.failed = String(!success);
   byId("status").textContent = success ? "Engine request succeeded." : "Request did not complete successfully. See reason codes below.";
   byId("result").textContent = JSON.stringify(data, null, 2);
+  if (action === "revoke" && success) clearConnectionState();
   if (data.retainedArtifact && typeof data.retainedArtifact === "object") renderRetainedArtifact(data.retainedArtifact);
   if (action === "start") {
     const link = byId("consent");
@@ -168,12 +174,17 @@ function render(action, data) {
 }
 function renderAssets(assets) {
   for (const asset of assets) {
+      const downloadability = assetDownloadability(asset);
+      const downloadable = downloadability !== "unavailable";
       const row = document.createElement("tr");
       const choose = document.createElement("input");
       choose.type = "radio";
       choose.name = "asset";
       choose.setAttribute("aria-label", "Select " + (asset.displayName || asset.assetId));
-      choose.disabled = !(/\.(iso|dcm|dicom)$/i.test(asset.displayName || "") || asset.mimeType === "application/dicom");
+      choose.disabled = !downloadable;
+      if (!downloadable) choose.title = isWorkspaceFile(asset)
+        ? "Google Workspace-native files cannot be downloaded as binary content."
+        : "Engine reports that this file is not downloadable.";
       choose.addEventListener("change", () => {
         selected = asset;
         byId("selection").textContent = asset.displayName || asset.assetId;
@@ -185,8 +196,31 @@ function renderAssets(assets) {
         cell.textContent = value == null ? "—" : String(value);
         row.append(cell);
       }
+      const availability = document.createElement("td");
+      availability.textContent = downloadability === "downloadable"
+        ? "Downloadable"
+        : downloadability === "unknown" ? "Checked on acquisition" : "Unavailable";
+      row.append(availability);
       byId("assets").append(row);
   }
+}
+function isWorkspaceFile(asset) {
+  return typeof asset?.mimeType === "string"
+    && asset.mimeType.toLowerCase().startsWith("application/vnd.google-apps.");
+}
+function assetDownloadability(asset) {
+  if (!asset || typeof asset !== "object" || isWorkspaceFile(asset)
+      || String(asset.kind || "").toLowerCase() === "folder") return "unavailable";
+  const capability = asset.canDownload
+    ?? asset.driveCanDownload
+    ?? asset.capabilities?.canDownload
+    ?? asset.metadata?.driveCanDownload;
+  if (capability === false || capability === "false") return "unavailable";
+  if (capability === true || capability === "true") return "downloadable";
+  return "unknown";
+}
+function isDownloadableAsset(asset) {
+  return assetDownloadability(asset) !== "unavailable";
 }
 async function run(action, payload = {}) {
   if (action === "start") {
@@ -215,6 +249,14 @@ function retainedArtifactPayload() {
   const explicit = byId("artifact-id").value.trim();
   if (explicit) return {artifactId: explicit};
   return null;
+}
+function selectedSelectionRef() {
+  const explicit = selected?.selectionRef || selected?.opaqueSelectionRef;
+  if (typeof explicit === "string" && explicit) return explicit;
+  const assetId = selected?.assetId;
+  return typeof assetId === "string" && /^cloud-selection:[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/.test(assetId)
+    ? assetId
+    : "";
 }
 function runRetained(action, extra = {}) {
   const reference = retainedArtifactPayload();
@@ -256,7 +298,7 @@ byId("next-page").addEventListener("click", () => {
 });
 byId("acquire").addEventListener("click", () => run("acquire", {
   connectionId: connectionId(),
-  selectionRef: selected?.selectionRef || selected?.opaqueSelectionRef || "",
+  selectionRef: selectedSelectionRef(),
   artifactId: byId("artifact-id").value.trim(),
   maximumBytes: byId("maximum-bytes").value.trim(),
   maximumDurationSeconds: byId("maximum-duration").value.trim(),
@@ -294,7 +336,7 @@ function graphBrowsePayload() {
 function graphAcquirePayload() {
   return {
     connectionId: connectionId(),
-    selectionRef: selected?.selectionRef || selected?.opaqueSelectionRef || "",
+    selectionRef: selectedSelectionRef(),
     artifactId: byId("artifact-id").value.trim(),
     maximumBytes: byId("maximum-bytes").value.trim(),
     maximumDurationSeconds: byId("maximum-duration").value.trim(),

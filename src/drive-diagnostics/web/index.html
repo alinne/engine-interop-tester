@@ -59,6 +59,7 @@
 </select>
 </div>
 <p class="hint">Browse is metadata-only. The location and continuation cursor stay bound to the selected Engine connection; provider IDs and resource keys remain inside Engine.</p>
+<p class="hint">Any provider-downloadable binary file can be selected for retained acquisition. Google Workspace-native files (Docs, Sheets, Slides, and similar) are shown but remain unavailable because they are not opaque binary downloads. Files without a capability signal are checked by Engine during acquisition.</p>
 <label for="folder">Folder returned by Engine</label>
 <select id="folder">
 <option value="">Choose a connection first</option>
@@ -74,11 +75,12 @@
 <th>Name</th>
 <th>Type</th>
 <th>Size</th>
+<th>Download</th>
 </tr>
 </thead>
 <tbody id="assets">
 <tr>
-<td colspan="4">Files appear after a successful Engine response.</td>
+<td colspan="5">Files appear after a successful Engine response.</td>
 </tr>
 </tbody>
 </table>
@@ -88,7 +90,7 @@
 <section>
 <span class="number">04</span>
 <h2>Retain &amp; inspect</h2>
-<p id="selection" role="status" aria-live="polite">Select one ISO or DICOM file.</p>
+<p id="selection" role="status" aria-live="polite">Select one downloadable file.</p>
 <div class="form-grid">
 <label for="artifact-id">Opaque retained artifact ID (acquire or reload)</label>
 <input id="artifact-id" maxlength="160" placeholder="vault-drive-study-001">
