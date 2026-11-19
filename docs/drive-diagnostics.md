@@ -103,8 +103,10 @@ Engine. The current Engine readiness candidate adds validated actor/tenant/sessi
 scope-decision linkage to the existing HTTP completion event, plus cloud-media allow/deny events.
 Custody operations retain their existing canonical lifecycle evidence. This consumer adds no local
 event schema or logging backbone and must not record tokens, provider bodies or private content.
-Conformance remains pending the Engine candidate's verified publication and live audit inspection;
-passing synthetic consumer tests alone cannot close that dependency.
+The metadata-only live acceptance audit confirmed seven cloud-access events linked to matching
+actor, tenant, session, resource, correlation and policy decisions. Engine publication and reviewed
+production qualification remain pending; this local synthetic-profile observation does not qualify
+retained file acquisition or production conformance.
 
 Synthetic HTTP tests prove the harness only. They do not qualify Engine's provider logic or a live
 Google account. Live proof still requires configured Google OAuth consent and personal/shared test
@@ -179,10 +181,18 @@ communication with Engine. HTTP loopback support exists for synthetic local test
 
 ## November 19 readiness candidate checks
 
-The current focused verifier record passes 83 synthetic cases, JavaScript syntax, committed-source route projection,
+The current focused verifier record passes 98 synthetic tests plus 60 subtests, JavaScript syntax, committed-source route projection,
 shell boundary and API-boundary checks. Source review confirms account/scope validation precedes
 terminal settlement, uncertain submits cannot be blindly replayed, active tickets cannot be replaced,
 and only successful bound graph output may restore retained artifacts. The 1,000-line transport
 adapter remains one cohesive local diagnostic state machine during qualification; extract graph
 state and verified streaming helpers before adding another provider or operation family. This
 bounded disposition does not authorize a parallel provider, storage or audit implementation.
+
+The projection is pinned to Engine `61f7a6345fe940153a51bbaa037071c9d60aed0f`. Browser acceptance
+renewed the existing read-only Google authorization, prepared and explicitly submitted a browse
+graph, observed successful root and node settlement, and recovered the same successful invocation
+after a page reload and an Engine restart without resubmission. A stale browser session was denied
+until refreshed. An expired connection correctly reported refresh and graph failure. This is live
+metadata-only proof under a local synthetic admission profile; no Drive content was downloaded or
+modified. Representative non-patient ISO/DICOM acquisition and production qualification remain open.

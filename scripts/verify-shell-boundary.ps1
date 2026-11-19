@@ -71,6 +71,7 @@ foreach ($entry in $bindings.operations.PSObject.Properties) {
         graphSubmitBrowse { $entry.Value.path -ceq '/engine/v1/external-media/tenants/{tenantId}/scopes/{scopeId}/invocations/{invocationRef}/browse' }
         graphSubmitAcquire { $entry.Value.path -ceq '/engine/v1/external-media/tenants/{tenantId}/scopes/{scopeId}/invocations/{invocationRef}/acquire-retained' }
         graphStatus { $entry.Value.path -ceq '/engine/v1/graph-jobs/tenants/{tenantId}/scopes/{scopeId}/invocations/{invocationRef}/status' }
+        graphWatch { $entry.Value.path -ceq '/engine/v1/graph-jobs/tenants/{tenantId}/scopes/{scopeId}/invocations/{invocationRef}/watch' }
         graphCancel { $entry.Value.path -ceq '/engine/v1/graph-jobs/tenants/{tenantId}/scopes/{scopeId}/invocations/{invocationRef}/cancel' }
         default { $false }
     }
