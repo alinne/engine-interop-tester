@@ -38,18 +38,32 @@ remains enabled, redirects are rejected, environment proxies are disabled, and r
    folder through the optional canonical browse projection. Continuation cursors are sent back only
    with the same connection and view. The legacy folder/file routes remain available for comparison.
 5. Select one ISO/DICOM candidate and explicitly acquire it through the retained-source operation,
-   then inspect, verify, materialize, or release the returned opaque artifact reference when those
-   optional routes are projected. The UI never auto-acquires, opens bytes, or falls back to the legacy
-   public import path. Provider resource keys, raw refs, local paths and content are removed from the
-   browser projection.
+   then inspect, verify, materialize, tombstone, or permanently delete the returned opaque artifact
+   reference when those optional routes are projected. After a reload, the retained-artifact ID
+   field can be used to request the same lifecycle operations; the client validates the opaque ID
+   before constructing a route, and Engine checks access against the authenticated owner scope.
+   The selected Drive connection is the browse/acquisition context, not a retained-artifact
+   authorization binding. Tombstone and delete require an explicit purpose and idempotency key;
+   permanent delete additionally requires the fixed UI confirmation. The UI never auto-acquires,
+   opens bytes, or falls back to the legacy public import path. Provider resource keys, raw refs,
+   local paths and content are removed from the browser projection.
 6. Prepare and explicitly submit browse/acquire graphs using Engine-issued invocation handles.
-   Reconcile status, request cancellation with an idempotency key, and recover the opaque retained
-   artifact descriptor from durable job status. A retry requires status reconciliation and a fresh
-   prepare; the tester never automatically resubmits an uncertain import.
+   Reconcile status, watch from an Engine cursor, request cancellation with an idempotency key, and
+   recover the opaque retained artifact descriptor from durable job status. After a reload, status
+   and watch accept only the explicitly entered scope and invocation handle; watch cursors are
+   scope-bound, bounded, and held only in process memory. A retry requires status reconciliation
+   and a fresh prepare; the tester never automatically resubmits an uncertain import. Sanitized
+   transport failures remain failures even when a host returns HTTP 200 with an unsuccessful
+   semantic result. A successful response with a mismatched invocation or connection binding is
+   rejected and cannot restore a retained artifact; an HTTP failure without an invocation binding
+   preserves the original Engine reason instead of being rewritten as a local binding mismatch.
 7. Revoke a selected connection only after an explicit confirmation.
 
-The pinned committed Engine contract projects 22 operations, including graph prepare, submit, status,
-cancel and retained-artifact access. An unavailable host capability remains `capability_unavailable`;
+The pinned committed Engine contract currently projects 22 operations, including graph prepare,
+submit, status, cancel and retained-artifact access. The next committed Engine projection adds the
+canonical graph-watch route as operation 23. Keep the current projection pinned until the parent
+supplies the final Engine contract commit; do not refresh it from an uncommitted or interim Engine
+checkout. An unavailable host capability remains `capability_unavailable`;
 projected routes do not prove runtime qualification. Verified reads are consumed server-side with
 bounded streaming and return only a byte count and SHA-256 hash. The diagnostic never renders medical content or
 implements ISO/DICOM parsing; those remain consumer application responsibilities.
@@ -166,7 +180,7 @@ communication with Engine. HTTP loopback support exists for synthetic local test
 
 ## November 19 readiness candidate checks
 
-The focused verifier passes 72 synthetic cases, JavaScript syntax, committed-source route projection,
+The current focused verifier record passes 83 synthetic cases, JavaScript syntax, committed-source route projection,
 shell boundary and API-boundary checks. Source review confirms account/scope validation precedes
 terminal settlement, uncertain submits cannot be blindly replayed, active tickets cannot be replaced,
 and only successful bound graph output may restore retained artifacts. The 1,000-line transport

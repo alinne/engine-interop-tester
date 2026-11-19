@@ -46,7 +46,7 @@ _ACTIONS = (
     "browse", "acquire", "inspect", "verifiedRead", "verify", "materialize",
     "release", "delete", "revoke", "graph",
     "graphPrepareBrowse", "graphPrepareAcquire", "graphSubmitBrowse", "graphSubmitAcquire",
-    "graphStatus", "graphCancel",
+    "graphStatus", "graphWatch", "graphCancel",
 )
 _OPTIONAL_ACTIONS = frozenset(_ACTIONS) - frozenset(("readiness", "start", "status", "connections", "collections", "assets"))
 _ACTION_ALIASES = {
@@ -244,7 +244,7 @@ class DriveClient:
         elif action == "connections":
             query = self.config.owner_scope
         elif action in {"collections", "assets", "browse", "acquire", "inspect", "verifiedRead", "verify", "materialize", "release", "delete", "revoke",
-                        "graphPrepareBrowse", "graphPrepareAcquire", "graphSubmitBrowse", "graphSubmitAcquire", "graphStatus", "graphCancel"}:
+                        "graphPrepareBrowse", "graphPrepareAcquire", "graphSubmitBrowse", "graphSubmitAcquire", "graphStatus", "graphWatch", "graphCancel"}:
             body = self._bound_body(action, payload)
 
         # Artifact access is defined as a GET by the Engine contract. Its
@@ -280,6 +280,8 @@ class DriveClient:
             request_body = {key: value for key, value in body.items() if not key.startswith("__graph")}
         if action == "graphStatus":
             request_body = None
+        if action == "graphWatch" and isinstance(body, Mapping):
+            request_body = body.get("__graphCursor")
         if action == "graphCancel" and isinstance(body, Mapping):
             request_body = {"idempotencyKey": body["idempotencyKey"]}
         # Connection revocation binds the connection only in the route.  The
@@ -313,8 +315,9 @@ class DriveClient:
         result = self._normalize_published_shape(action, result)
         raw_result = result
         result = self._sanitize(action, result, selected_connection=selected_connection)
-        if action in {"graphPrepareBrowse", "graphPrepareAcquire", "graphSubmitBrowse", "graphSubmitAcquire", "graphStatus", "graphCancel"}:
-            result = self._project_graph_result(action, raw_result, result)
+        if action in {"graphPrepareBrowse", "graphPrepareAcquire", "graphSubmitBrowse", "graphSubmitAcquire", "graphStatus", "graphWatch", "graphCancel"}:
+            graph_kind = payload.get("graphKind") if isinstance(payload, Mapping) else None
+            result = self._project_graph_result(action, raw_result, result, graph_kind=graph_kind)
         if action == "start" and result.get("isSuccess"):
             state = result.get("state")
             url = result.get("authorizationUrl")
@@ -327,8 +330,10 @@ class DriveClient:
             self._remember_connections(result)
         elif action == "collections" and result.get("isSuccess"):
             result = {**result, "connectionId": self._last_collection_connection}
-            self._remember_collections(result)
+            self._remember_collections(result, self._last_collection_connection)
         elif action in {"assets", "browse"} and result.get("isSuccess"):
+            if action == "browse":
+                self._remember_collections(result, selected_connection)
             self._remember_assets(result, selected_connection)
         elif action in {"acquire", "materialize"} and result.get("isSuccess"):
             self._remember_artifacts(result, selected_connection)
@@ -340,7 +345,7 @@ class DriveClient:
                 binding = self._graph_bindings.get("browse")
                 if binding is not None:
                     self._remember_assets(result, binding.get("connectionId"))
-        elif action == "graphStatus":
+        elif action in {"graphStatus", "graphWatch"}:
             self._remember_graph_status(result)
         result.pop("_graphBindingVerified", None)
         return result
@@ -370,10 +375,13 @@ class DriveClient:
         status = result.get("httpStatus")
         if not isinstance(status, int) or not 200 <= status < 300:
             return normalized
-        # Graph submission status is authoritative even if a legacy/proxy
-        # response also carries an optimistic isSuccess field. Other routes
-        # retain their explicit published result shape unchanged.
-        if "isSuccess" in result and action not in {"graphSubmitBrowse", "graphSubmitAcquire"}:
+        # Graph lifecycle DTOs are authoritative even if a legacy/proxy
+        # response also carries an optimistic isSuccess field.  Do not let an
+        # outer success bit bypass validation of the published watch/status/
+        # cancel envelope.
+        if "isSuccess" in result and action not in {
+            "graphSubmitBrowse", "graphSubmitAcquire", "graphStatus", "graphWatch", "graphCancel",
+        }:
             return normalized
 
         if action == "readiness":
@@ -415,6 +423,12 @@ class DriveClient:
             required = ("invocationRef", "scopeId", "rootJobId", "graphHash", "expiresUtc")
             if all(isinstance(result.get(key), str) and result.get(key) for key in required):
                 return {**normalized, "isSuccess": True, "reasonCodes": _reason_codes(result.get("reasonCodes"))}
+        if action == "graphWatch":
+            watch = result.get("watch")
+            if (isinstance(result.get("invocationRef"), str)
+                    and _validate_published_graph_watch(watch)):
+                return {**normalized, "isSuccess": True, "reasonCodes": _reason_codes(result.get("reasonCodes"))}
+            return {"isSuccess": False, "reasonCodes": ["engine_response_invalid"], "httpStatus": status}
         if action in {"graphSubmitBrowse", "graphSubmitAcquire"}:
             required = ("invocationRef", "scopeId", "rootJobId", "graphHash", "status")
             if not all(isinstance(result.get(key), str) and result.get(key) for key in required[:-1]):
@@ -432,8 +446,10 @@ class DriveClient:
                 return {**normalized, "isSuccess": False, "reasonCodes": reasons}
             return {"isSuccess": False, "reasonCodes": ["engine_response_invalid"], "httpStatus": status}
         if action == "graphStatus":
-            if isinstance(result.get("invocationRef"), str) and isinstance(result.get("status"), Mapping):
-                status_value = result["status"].get("status")
+            status_projection = result.get("status")
+            if (isinstance(result.get("invocationRef"), str)
+                    and _validate_published_graph_status(status_projection)):
+                status_value = status_projection.get("status")
                 normalized_status = _normalize_graph_status(status_value)
                 if normalized_status in _GRAPH_FAILED_STATUSES:
                     return {
@@ -443,7 +459,12 @@ class DriveClient:
                     }
                 return {**normalized, "isSuccess": True, "reasonCodes": _reason_codes(result.get("reasonCodes"))}
         if action == "graphCancel":
-            if isinstance(result.get("operation"), str) or isinstance(result.get("status"), (str, Mapping)):
+            # Some pre-projection local fixtures carry isSuccess/status rather
+            # than the published control DTO.  They still must name cancel;
+            # published responses additionally require the bounded result
+            # envelope and row/tree inventories.
+            if (result.get("operation") == "cancel"
+                    and ("isSuccess" in result or _validate_published_graph_control(result))):
                 return {**normalized, "isSuccess": True, "reasonCodes": _reason_codes(result.get("reasonCodes"))}
 
         return normalized
@@ -497,6 +518,35 @@ class DriveClient:
             raise DriveClientError("engine_contract_path_unsupported")
         return path
 
+    def _graph_binding_for_payload(self, graph_kind: str, payload: Mapping[str, Any]) -> dict[str, Any] | None:
+        """Use memory when present, or explicitly recover only an opaque ticket handle."""
+        binding = self._graph_bindings.get(graph_kind)
+        supplied_scope = payload.get("graphScopeId")
+        supplied_invocation = payload.get("graphInvocationRef")
+        if supplied_scope is None and supplied_invocation is None:
+            return binding
+        if not isinstance(supplied_scope, str) or not _valid_graph_scope_id(supplied_scope):
+            raise DriveClientError("graph_scope_id_invalid")
+        if not isinstance(supplied_invocation, str) or not _valid_graph_invocation_ref(supplied_invocation):
+            raise DriveClientError("graph_invocation_ref_invalid")
+        if binding is not None and (binding.get("scopeId") != supplied_scope or binding.get("invocationRef") != supplied_invocation):
+            raise DriveClientError("graph_binding_mismatch")
+        if binding is None:
+            binding = {
+                "connectionId": None,
+                "tenantId": self.config.tenant_id,
+                "scopeId": supplied_scope,
+                "invocationRef": supplied_invocation,
+                "requestBody": {},
+                # Recovery is status/watch only until the server reports a
+                # terminal observation. It never reconstructs a submit body.
+                "submitted": True,
+                "statusTerminal": False,
+                "recovered": True,
+            }
+            self._graph_bindings[graph_kind] = binding
+        return binding
+
     def _bound_body(self, action: str, payload: Mapping[str, Any] | None) -> dict[str, Any]:
         if not isinstance(payload, Mapping):
             raise DriveClientError("request_payload_required")
@@ -512,19 +562,31 @@ class DriveClient:
             raise DriveClientError("graph_kind_mismatch")
         if expected_graph_kind is None and isinstance(payload.get("graphKind"), str):
             graph_kind = payload["graphKind"]
-        if action in {"graphStatus", "graphCancel"}:
+        if action in {"graphStatus", "graphWatch", "graphCancel"}:
             if graph_kind not in {"browse", "acquire"}:
                 raise DriveClientError("graph_kind_required")
-            binding = self._graph_bindings.get(graph_kind)
+            binding = self._graph_binding_for_payload(graph_kind, payload)
             if not binding:
                 raise DriveClientError("graph_not_prepared")
             if action == "graphCancel":
                 idempotency_key = payload.get("idempotencyKey")
-                if not isinstance(idempotency_key, str) or not idempotency_key or len(idempotency_key) > 256:
+                if not isinstance(idempotency_key, str) or not re.fullmatch(r"[A-Za-z0-9._:-]{1,128}", idempotency_key):
                     raise DriveClientError("graph_cancel_idempotency_key_required")
                 return {
                     "graphKind": graph_kind,
                     "idempotencyKey": idempotency_key,
+                    "__graphTenantId": self.config.tenant_id,
+                    "__graphScopeId": binding["scopeId"],
+                    "__graphInvocationRef": binding["invocationRef"],
+                }
+            if action == "graphWatch":
+                cursor = payload.get("graphCursor")
+                if cursor is None:
+                    cursor = binding.get("cursor")
+                _validate_graph_cursor(cursor, self.config.tenant_id, binding["scopeId"])
+                return {
+                    "graphKind": graph_kind,
+                    "__graphCursor": cursor,
                     "__graphTenantId": self.config.tenant_id,
                     "__graphScopeId": binding["scopeId"],
                     "__graphInvocationRef": binding["invocationRef"],
@@ -564,6 +626,45 @@ class DriveClient:
             return {**body, "__graphKind": graph_kind}
         if graph_kind is not None:
             raise DriveClientError("graph_action_unsupported")
+
+        retained_artifact_id = payload.get("retainedArtifactId")
+        explicit_artifact_id = payload.get("artifactId") if retained_artifact_id is None else None
+        artifact_id = retained_artifact_id or explicit_artifact_id
+        if action in {"inspect", "verifiedRead", "verify", "materialize", "release", "delete"}:
+            if not isinstance(artifact_id, str) or not _valid_opaque_artifact_id(artifact_id):
+                raise DriveClientError("artifact_id_invalid")
+            # Explicit artifactId is the reload path and is authorized by the
+            # Engine owner scope. Only an in-process retainedArtifactId needs a
+            # selected connection binding in this diagnostic client.
+            if retained_artifact_id is not None:
+                if not isinstance(connection_id, str) or connection_id not in self._connection_ids:
+                    raise DriveClientError("unknown_connection_reference")
+                if artifact_id not in self._artifact_ids.get(connection_id, set()):
+                    raise DriveClientError("unknown_artifact_reference")
+            body = {"__routeArtifactId": artifact_id}
+            if action in {"verify", "materialize", "release", "delete"}:
+                purpose = payload.get("purpose")
+                if not isinstance(purpose, str) or not purpose or len(purpose) > 128:
+                    raise DriveClientError("artifact_access_purpose_invalid")
+                body["purpose"] = purpose
+            if action == "materialize":
+                output_path = payload.get("relativeOutputPath")
+                if not isinstance(output_path, str) or not output_path or len(output_path) > 4096:
+                    raise DriveClientError("materialize_output_path_invalid")
+                body["relativeOutputPath"] = output_path
+            if action in {"release", "delete"}:
+                key = payload.get("idempotencyKey")
+                if not isinstance(key, str) or not key or len(key) > 256:
+                    raise DriveClientError("idempotency_key_invalid")
+                body["idempotencyKey"] = key
+            for key in ("sessionId", "correlationId", "traceparent"):
+                value = payload.get(key)
+                if value is not None:
+                    if not isinstance(value, str) or not value or len(value) > 256:
+                        raise DriveClientError("artifact_access_context_invalid")
+                    body[key] = value
+            return body
+
         if not isinstance(connection_id, str) or connection_id not in self._connection_ids:
             raise DriveClientError("unknown_connection_reference")
         body: dict[str, Any] = {"connectionId": connection_id, "ownerScope": self.config.owner_scope}
@@ -653,42 +754,6 @@ class DriveClient:
                 "publication": _validated_publication(publication),
                 "maximumDurationSeconds": maximum_duration,
             }
-            return body
-        retained_artifact_id = payload.get("retainedArtifactId")
-        explicit_artifact_id = payload.get("artifactId") if retained_artifact_id is None else None
-        artifact_id = retained_artifact_id or explicit_artifact_id
-        if action in {"inspect", "verifiedRead", "verify", "materialize", "release", "delete"}:
-            if not isinstance(artifact_id, str) or not _valid_opaque_artifact_id(artifact_id):
-                raise DriveClientError("artifact_id_invalid")
-            # A retainedArtifactId is an in-process binding and must have been
-            # returned for this connection.  A separately supplied artifactId
-            # is the explicit reload path: the Engine remains authoritative
-            # for its owner-scope authorization, while this client still
-            # rejects path/control characters before URL construction.
-            if retained_artifact_id is not None and artifact_id not in self._artifact_ids.get(connection_id, set()):
-                raise DriveClientError("unknown_artifact_reference")
-            body = {"__routeArtifactId": artifact_id}
-            if action in {"verify", "materialize", "release", "delete"}:
-                purpose = payload.get("purpose")
-                if not isinstance(purpose, str) or not purpose or len(purpose) > 128:
-                    raise DriveClientError("artifact_access_purpose_invalid")
-                body["purpose"] = purpose
-            if action == "materialize":
-                output_path = payload.get("relativeOutputPath")
-                if not isinstance(output_path, str) or not output_path or len(output_path) > 4096:
-                    raise DriveClientError("materialize_output_path_invalid")
-                body["relativeOutputPath"] = output_path
-            if action in {"release", "delete"}:
-                key = payload.get("idempotencyKey")
-                if not isinstance(key, str) or not key or len(key) > 256:
-                    raise DriveClientError("idempotency_key_invalid")
-                body["idempotencyKey"] = key
-            for key in ("sessionId", "correlationId", "traceparent"):
-                value = payload.get(key)
-                if value is not None:
-                    if not isinstance(value, str) or not value or len(value) > 256:
-                        raise DriveClientError("artifact_access_context_invalid")
-                    body[key] = value
             return body
         collection_ref = payload.get("collectionRef")
         if not isinstance(collection_ref, str) or collection_ref not in self._collection_ids.get(connection_id, set()):
@@ -829,7 +894,11 @@ class DriveClient:
 
     @staticmethod
     def _sanitize(action: str, result: Mapping[str, Any], *, selected_connection: str | None = None) -> dict[str, Any]:
-        output: dict[str, Any] = {"action": action, "isSuccess": result.get("isSuccess") is True, "reasonCodes": _reason_codes(result.get("reasonCodes"))}
+        output: dict[str, Any] = {
+            "action": action,
+            "isSuccess": result.get("isSuccess") is True,
+            "reasonCodes": _failure_reason_codes(result),
+        }
         for key in _SAFE_STATUS_KEYS - {"isSuccess", "reasonCodes"}:
             if key in result and isinstance(result[key], (str, int, float, bool)):
                 output[key] = result[key]
@@ -870,7 +939,7 @@ class DriveClient:
             output["publication"] = _safe_record(result["publication"])
         if isinstance(result.get("connection"), Mapping):
             output["connection"] = _safe_record(result["connection"])
-        if action in {"graphPrepareBrowse", "graphPrepareAcquire", "graphSubmitBrowse", "graphSubmitAcquire", "graphStatus", "graphCancel"}:
+        if action in {"graphPrepareBrowse", "graphPrepareAcquire", "graphSubmitBrowse", "graphSubmitAcquire", "graphStatus", "graphWatch", "graphCancel"}:
             _append_safe_graph_fields(output, result)
         return output
 
@@ -916,14 +985,14 @@ class DriveClient:
             "statusTerminal": False,
         }
 
-    def _project_graph_result(self, action: str, raw: Mapping[str, Any], output: dict[str, Any]) -> dict[str, Any]:
+    def _project_graph_result(self, action: str, raw: Mapping[str, Any], output: dict[str, Any], *, graph_kind: str | None = None) -> dict[str, Any]:
         """Project only output bound to the prepared graph's connection.
 
         Graph responses contain an intentionally broad JsonElement/status tree. The
         diagnostic app receives only provider-neutral browse records or the
         retained artifact identity, never that tree or provider metadata.
         """
-        kind = "browse" if "Browse" in action else "acquire"
+        kind = graph_kind if graph_kind in {"browse", "acquire"} else ("browse" if "Browse" in action else "acquire")
         invocation = raw.get("invocationRef") or raw.get("graphInvocationRef")
         if action == "graphStatus" and isinstance(invocation, str):
             for candidate_kind, candidate in self._graph_bindings.items():
@@ -935,7 +1004,7 @@ class DriveClient:
         else:
             binding = self._graph_bindings.get(kind)
         if binding is None:
-            if action in {"graphSubmitBrowse", "graphSubmitAcquire", "graphStatus"}:
+            if action in {"graphSubmitBrowse", "graphSubmitAcquire", "graphStatus", "graphWatch"}:
                 return self._graph_binding_failure(output)
             return output
         # A transport-level Engine failure has no invocation binding to echo.
@@ -944,7 +1013,7 @@ class DriveClient:
         # unverified so the caller still has to reconcile before retrying.
         http_status = raw.get("httpStatus")
         if (
-            action in {"graphSubmitBrowse", "graphSubmitAcquire", "graphStatus"}
+            action in {"graphSubmitBrowse", "graphSubmitAcquire", "graphStatus", "graphWatch"}
             and output.get("isSuccess") is not True
             and type(http_status) is int
             and 400 <= http_status <= 599
@@ -954,17 +1023,52 @@ class DriveClient:
                 output.pop(key, None)
             output["_graphBindingVerified"] = False
             return output
-        if action in {"graphSubmitBrowse", "graphSubmitAcquire", "graphStatus"} and (
+        if action in {"graphSubmitBrowse", "graphSubmitAcquire", "graphStatus", "graphWatch"} and (
                 not isinstance(invocation, str) or invocation != binding.get("invocationRef")):
             return self._graph_binding_failure(output)
         if isinstance(invocation, str) and invocation and invocation != binding.get("invocationRef"):
             return self._graph_binding_failure(output)
+        if action == "graphCancel":
+            http_status = raw.get("httpStatus")
+            published = type(http_status) is int and 200 <= http_status < 300 and "isSuccess" not in raw
+            if raw.get("operation") != "cancel" or (published and not _validate_published_graph_control(raw)):
+                output["isSuccess"] = False
+                output["reasonCodes"] = ["engine_response_invalid"]
+                output["_graphBindingVerified"] = False
+                return output
+            output["_graphBindingVerified"] = True
+            return output
         if action == "graphStatus":
             verified = self._project_graph_status(raw, output, binding)
             output["_graphBindingVerified"] = verified
             if not verified:
                 output["isSuccess"] = False
                 output["reasonCodes"] = ["graph_binding_mismatch"]
+            return output
+        if action == "graphWatch":
+            watch = raw.get("watch")
+            if not isinstance(watch, Mapping):
+                return self._graph_binding_failure(output)
+            cursor = watch.get("cursor")
+            next_cursor = watch.get("nextCursor")
+            try:
+                _validate_graph_cursor(cursor, self.config.tenant_id, binding.get("scopeId"))
+                _validate_graph_cursor(next_cursor, self.config.tenant_id, binding.get("scopeId"))
+            except DriveClientError:
+                return self._graph_binding_failure(output)
+            changed_jobs = watch.get("changedJobs")
+            if not _validate_published_graph_watch(watch):
+                return self._graph_binding_failure(output)
+            output["graphChangedJobCount"] = min(len(changed_jobs), 4096)
+            output["graphStatuses"] = _graph_status_values(watch.get("projection"))[:32]
+            status_projection = {
+                "status": {"projection": watch.get("projection"), "nextCursor": next_cursor},
+            }
+            verified = self._project_graph_status(status_projection, output, binding)
+            output["_graphBindingVerified"] = verified
+            if not verified:
+                return self._graph_binding_failure(output)
+            output["graphNextCursor"] = next_cursor
             return output
         output["_graphBindingVerified"] = True
         if action not in {"graphSubmitBrowse", "graphSubmitAcquire"} or raw.get("isSuccess") is not True:
@@ -1025,9 +1129,19 @@ class DriveClient:
             return False
         if scope.get("tenantId") != self.config.tenant_id or scope.get("scopeId") != binding.get("scopeId"):
             return False
+        try:
+            _validate_graph_cursor(cursor, self.config.tenant_id, binding.get("scopeId"))
+        except DriveClientError:
+            return False
         projection = status.get("projection")
-        if not isinstance(projection, Mapping) or not isinstance(projection.get("jobs"), list):
-            return True
+        if not _validate_published_graph_projection(projection, cursor):
+            return False
+        # Cursor advancement is a commit point.  Every scope, inventory, and
+        # artifact check below must succeed before the durable local binding is
+        # allowed to move past its previous observation boundary.
+        def commit_cursor() -> None:
+            if isinstance(binding, dict):
+                binding["cursor"] = cursor
         # The cursor is the primary continuation boundary, but a projected job
         # snapshot also carries its tenant/scope envelope.  Reject a snapshot
         # whose projection crosses that boundary before considering artifacts.
@@ -1041,6 +1155,7 @@ class DriveClient:
             output["reasonCodes"] = ["external_media_graph_not_completed"]
             # The response is bound to this ticket; the failed terminal state
             # may settle reconciliation only after all scope checks pass.
+            commit_cursor()
             return True
         if status_value and status_value not in _GRAPH_COMPLETED_STATUSES | _GRAPH_ACTIVE_STATUSES:
             output["isSuccess"] = False
@@ -1063,11 +1178,13 @@ class DriveClient:
                 output.pop(key, None)
             output["isSuccess"] = False
             output["reasonCodes"] = ["external_media_graph_not_completed"]
+            commit_cursor()
             return True
         if status_value in _GRAPH_ACTIVE_STATUSES or (
                 not status_value and any(state in _GRAPH_ACTIVE_STATUSES for state in job_states)):
             # The status request itself succeeded, but an active job is not a
             # valid source of a retained artifact yet.
+            commit_cursor()
             return True
         if job_states and not all(state in _GRAPH_COMPLETED_STATUSES for state in job_states):
             output["isSuccess"] = False
@@ -1089,6 +1206,7 @@ class DriveClient:
                     continue
                 recovered.append({"artifactId": artifact_id, "contentHash": content_hash, "byteSize": byte_size})
         if not recovered:
+            commit_cursor()
             return True
         output["retainedArtifacts"] = recovered[:32]
         output["retainedArtifact"] = recovered[0]
@@ -1097,6 +1215,7 @@ class DriveClient:
         if isinstance(connection_id, str):
             self._artifact_ids.setdefault(connection_id, set()).update(item["artifactId"] for item in recovered[:32])
             binding["retainedArtifactId"] = recovered[0]["artifactId"]
+        commit_cursor()
         return True
 
     def _remember_graph_submit(self, action: str, result: Mapping[str, Any]) -> None:
@@ -1121,8 +1240,9 @@ class DriveClient:
             if binding.get("submitted"):
                 binding["statusTerminal"] = _graph_result_terminal(result)
 
-    def _remember_collections(self, result: Mapping[str, Any]) -> None:
-        connection_id = result.get("connectionId")
+    def _remember_collections(self, result: Mapping[str, Any], connection_id: str | None = None) -> None:
+        if connection_id is None:
+            connection_id = result.get("connectionId")
         if not isinstance(connection_id, str):
             return
         refs = self._collection_ids.setdefault(connection_id, set())
@@ -1186,9 +1306,204 @@ def _reason_codes(value: Any) -> list[str]:
     return []
 
 
+def _failure_reason_codes(result: Mapping[str, Any]) -> list[str]:
+    """Project an operation envelope's published failure reason without its body.
+
+    Cloud operation routes may return a successful HTTP response whose outer
+    envelope is unsuccessful while the published operation DTO carries the
+    actionable reason under ``result``.  Read only that bounded reason-code
+    field; never copy the nested operation payload into the UI projection.
+    """
+    reason_codes = _reason_codes(result.get("reasonCodes"))
+    if reason_codes or result.get("isSuccess") is not False:
+        return reason_codes
+    nested = result.get("result")
+    if isinstance(nested, Mapping) and nested.get("isSuccess") is False:
+        return _reason_codes(nested.get("reasonCodes"))
+    return []
+
+
 def _valid_opaque_artifact_id(value: str) -> bool:
     """Keep an explicitly re-entered artifact ref path-safe and bounded."""
     return bool(re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,159}", value))
+
+
+def _valid_graph_scope_id(value: str) -> bool:
+    return bool(re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,255}", value))
+
+
+def _valid_graph_invocation_ref(value: str) -> bool:
+    return bool(re.fullmatch(r"[0-9a-f]{64}", value))
+
+
+def _validate_graph_cursor(value: Any, tenant_id: str, scope_id: Any, *, require_jobs: bool = True) -> None:
+    """Validate only the bounded route binding before Engine validates full DTO semantics."""
+    if not isinstance(value, Mapping) or not isinstance(scope_id, str):
+        raise DriveClientError("graph_cursor_required")
+    try:
+        serialized = json.dumps(value, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    except (TypeError, ValueError) as exc:
+        raise DriveClientError("graph_cursor_invalid") from exc
+    if len(serialized) > _MAX_RESPONSE_BYTES:
+        raise DriveClientError("graph_cursor_too_large")
+    cursor_scope = value.get("scope")
+    if (not isinstance(cursor_scope, Mapping)
+            or cursor_scope.get("tenantId") != tenant_id
+            or cursor_scope.get("scopeId") != scope_id):
+        raise DriveClientError("graph_cursor_scope_mismatch")
+    if not require_jobs and "contractVersion" not in value and "jobCursors" not in value:
+        return
+    if value.get("contractVersion") != 1:
+        raise DriveClientError("graph_cursor_invalid")
+    job_cursors = value.get("jobCursors")
+    if not isinstance(job_cursors, list) or not 1 <= len(job_cursors) <= 4096:
+        raise DriveClientError("graph_cursor_invalid")
+    seen: set[str] = set()
+    for item in job_cursors:
+        if not isinstance(item, Mapping) or item.get("schemaVersion") != 1:
+            raise DriveClientError("graph_cursor_invalid")
+        job = item.get("job")
+        job_id = job.get("jobId") if isinstance(job, Mapping) else None
+        sequence = item.get("afterSequence")
+        if (not isinstance(job_id, str) or not job_id or len(job_id) > 256
+                or job_id in seen or type(sequence) is not int or sequence < 0):
+            raise DriveClientError("graph_cursor_invalid")
+        seen.add(job_id)
+
+
+def _validate_published_graph_cursor(value: Any) -> bool:
+    """Check the structural cursor guarantees needed before projecting a DTO.
+
+    The Engine remains authoritative for canonical job references and the full
+    observation scope.  The app nevertheless must reject an envelope that is
+    missing the versioned cursor inventory, rather than treating a scope-only
+    cursor as a successful status/watch response.
+    """
+    if not isinstance(value, Mapping):
+        return False
+    scope = value.get("scope")
+    if not isinstance(scope, Mapping):
+        return False
+    tenant_id, scope_id = scope.get("tenantId"), scope.get("scopeId")
+    if not isinstance(tenant_id, str) or not isinstance(scope_id, str):
+        return False
+    try:
+        _validate_graph_cursor(value, tenant_id, scope_id)
+    except DriveClientError:
+        return False
+    return True
+
+
+def _validate_published_graph_projection(value: Any, cursor: Mapping[str, Any]) -> bool:
+    """Validate the bounded projection/cursor inventory join.
+
+    This mirrors the consumer-visible part of
+    ``DistributedAgentJobProjection.Validate``.  Canonical job-reference
+    validation stays in Engine; we only require the fields needed to prevent a
+    cross-scope or cursor-inventory projection from advancing local state.
+    """
+    if not isinstance(value, Mapping) or value.get("contractVersion") != 1 or value.get("advisoryOnly") is not True:
+        return False
+    scope = cursor.get("scope") if isinstance(cursor, Mapping) else None
+    if not isinstance(scope, Mapping):
+        return False
+    if value.get("tenantId") != scope.get("tenantId") or value.get("scopeId") != scope.get("scopeId"):
+        return False
+    jobs = value.get("jobs")
+    cursors = cursor.get("jobCursors")
+    if not isinstance(jobs, list) or not isinstance(cursors, list) or len(jobs) != len(cursors):
+        return False
+    for row, item in zip(jobs, cursors):
+        if not isinstance(row, Mapping) or row.get("contractVersion") != 1:
+            return False
+        job = row.get("job")
+        cursor_job = item.get("job") if isinstance(item, Mapping) else None
+        if not isinstance(job, Mapping) or not isinstance(cursor_job, Mapping) or job.get("jobId") != cursor_job.get("jobId"):
+            return False
+    return True
+
+
+def _validate_published_graph_status(value: Any) -> bool:
+    if not isinstance(value, Mapping):
+        return False
+    cursor = value.get("nextCursor")
+    if not _validate_published_graph_cursor(cursor):
+        return False
+    return _validate_published_graph_projection(value.get("projection"), cursor)
+
+
+def _validate_published_graph_watch(value: Any) -> bool:
+    if not isinstance(value, Mapping):
+        return False
+    cursor, next_cursor = value.get("cursor"), value.get("nextCursor")
+    if not _validate_published_graph_cursor(cursor) or not _validate_published_graph_cursor(next_cursor):
+        return False
+    cursor_scope = cursor.get("scope")
+    next_scope = next_cursor.get("scope")
+    if cursor_scope != next_scope:
+        return False
+    previous = cursor.get("jobCursors")
+    following = next_cursor.get("jobCursors")
+    changed = value.get("changedJobs")
+    if not isinstance(previous, list) or not isinstance(following, list) or not isinstance(changed, list):
+        return False
+    if len(previous) != len(following):
+        return False
+    expected: dict[str, Mapping[str, Any]] = {}
+    for before, after in zip(previous, following):
+        if not isinstance(before, Mapping) or not isinstance(after, Mapping):
+            return False
+        before_job = before.get("job")
+        after_job = after.get("job")
+        if (not isinstance(before_job, Mapping) or not isinstance(after_job, Mapping)
+                or before_job.get("jobId") != after_job.get("jobId")
+                or type(before.get("afterSequence")) is not int
+                or type(after.get("afterSequence")) is not int
+                or after["afterSequence"] < before["afterSequence"]):
+            return False
+        if after["afterSequence"] > before["afterSequence"]:
+            expected[after_job["jobId"]] = after_job
+    if len(changed) != len(expected):
+        return False
+    seen: set[str] = set()
+    for item in changed:
+        if not isinstance(item, Mapping) or not isinstance(item.get("jobId"), str):
+            return False
+        job_id = item["jobId"]
+        if job_id in seen or job_id not in expected or dict(item) != dict(expected[job_id]):
+            return False
+        seen.add(job_id)
+    return _validate_published_graph_projection(value.get("projection"), next_cursor)
+
+
+def _validate_published_graph_control(value: Mapping[str, Any]) -> bool:
+    """Validate the safe, published shape of GraphJobExecutionControlResult."""
+    if value.get("schemaVersion") != 1 or value.get("operation") != "cancel":
+        return False
+    tree, rows = value.get("tree"), value.get("rows")
+    if not isinstance(tree, Mapping) or not isinstance(rows, list):
+        return False
+    if tree.get("schemaVersion") != 1 or not isinstance(tree.get("rootJob"), Mapping):
+        return False
+    bindings = tree.get("bindings")
+    if not isinstance(bindings, list) or not bindings or len(rows) != len(bindings):
+        return False
+    if any(not isinstance(binding, Mapping) for binding in bindings):
+        return False
+    # Row identity is checked at the boundary without copying the opaque
+    # lineage details into the app projection.
+    binding_ids = {
+        binding.get("job", {}).get("jobId")
+        for binding in bindings
+        if isinstance(binding.get("job"), Mapping)
+    }
+    row_ids = {
+        row.get("binding", {}).get("job", {}).get("jobId")
+        for row in rows
+        if isinstance(row, Mapping) and isinstance(row.get("binding"), Mapping)
+        and isinstance(row["binding"].get("job"), Mapping)
+    }
+    return len(binding_ids) == len(bindings) and row_ids == binding_ids
 
 
 def _validated_publication(value: Mapping[str, Any]) -> dict[str, Any]:
@@ -1296,6 +1611,18 @@ def _append_safe_graph_fields(output: dict[str, Any], result: Mapping[str, Any])
         value = result.get(key)
         if isinstance(value, str) and len(value) <= 128:
             output[key] = value
+    status = result.get("status")
+    watch = result.get("watch")
+    for container in (status, watch):
+        if not isinstance(container, Mapping):
+            continue
+        cursor = container.get("nextCursor")
+        if isinstance(cursor, Mapping):
+            # A scope-only cursor can look route-bound while dropping the job
+            # sequence that makes continuation safe.  Expose only the
+            # published, versioned cursor inventory to the browser projection.
+            if _validate_published_graph_cursor(cursor):
+                output["graphNextCursor"] = cursor
 
 
 def _graph_status_values(value: Any, *, depth: int = 0) -> list[str]:

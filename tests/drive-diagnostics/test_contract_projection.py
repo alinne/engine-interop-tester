@@ -100,3 +100,21 @@ class ContractProjectionTests(unittest.TestCase):
         self.run_git('-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '-qm', 'unregistered graph operation')
         with self.assertRaisesRegex(ValueError, 'Missing canonical optional operation'):
             projection.project(self.root)
+
+    def test_graph_watch_route_follows_graph_jobs_catalog_authority(self):
+        family = "GraphJobs"
+        member = "WatchTemplate"
+        operation = "graph-job.observation.watch"
+        self.catalog.write_text(self.catalog.read_text() +
+            f'\nStable("{operation}", "POST", EngineControlApiRoutes.{family}.{member}),')
+        graph = self.root / projection.OPTIONAL_SOURCE_FILES[2]
+        graph.write_text('public static class GraphJobs\n    {\n'
+                         '        public const string WatchTemplate =\n'
+                         '            "/engine/v1/graph-jobs/tenants/{tenantId}/scopes/{scopeId}/invocations/{invocationRef}/watch";\n    }')
+        self.run_git('add', '.')
+        self.run_git('-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '-qm', 'graph watch operation')
+        result = projection.project(self.root)
+        self.assertEqual('POST', result['operations']['graphWatch']['method'])
+        self.assertEqual('/engine/v1/graph-jobs/tenants/{tenantId}/scopes/{scopeId}/invocations/{invocationRef}/watch',
+                         result['operations']['graphWatch']['path'])
+        self.assertIn(str(graph.relative_to(self.root)), result['sourceHashes'])

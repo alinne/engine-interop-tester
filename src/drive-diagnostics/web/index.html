@@ -153,10 +153,17 @@
 </div>
 <label for="graph-kind">Prepared graph</label>
 <select id="graph-kind"><option value="browse">Browse</option><option value="acquire">Acquire</option></select>
+<label for="graph-scope-id">Graph scope ID (optional recovery handle)</label>
+<input id="graph-scope-id" maxlength="256" placeholder="scope returned by Engine">
+<label for="graph-invocation-ref">Graph invocation ref (optional recovery handle)</label>
+<input id="graph-invocation-ref" maxlength="64" placeholder="64-character Engine invocation ref">
+<label for="graph-cursor">Watch cursor (JSON, optional)</label>
+<textarea id="graph-cursor" maxlength="1048576" rows="4" placeholder='{"contractVersion":1,"scope":{...},"jobCursors":[...]}'></textarea>
+<button id="graph-watch">Watch from cursor</button>
 <label for="graph-cancel-idempotency">Cancel idempotency key</label>
-<input id="graph-cancel-idempotency" maxlength="256" placeholder="drive-diagnostics-cancel-001">
+<input id="graph-cancel-idempotency" maxlength="128" placeholder="drive-diagnostics-cancel-001">
 <button id="graph-cancel">Request graph cancellation</button>
-<p class="hint">Cancellation is an intent-only request. Engine owns the durable graph control plan. A failed or uncertain submit is reconciled with status; after a terminal result, prepare a fresh graph before explicitly submitting again.</p>
+<p class="hint">After a reload, enter the scope and invocation returned by Engine to inspect status or watch. The app never resubmits a recovered graph. Cancellation is an intent-only request. Engine owns the durable graph control plan. A failed or uncertain submit is reconciled with status; after a terminal result, prepare a fresh graph before explicitly submitting again.</p>
 </section>
 <section>
 <span class="number">06</span>

@@ -35,6 +35,9 @@ function resetFolders({clearResult: resetResult = false} = {}) {
   folderRecords = new Map();
   clearFiles({clearArtifact: true});
   retainedArtifact = null;
+  byId("graph-scope-id").value = "";
+  byId("graph-invocation-ref").value = "";
+  byId("graph-cursor").value = "";
   if (resetResult) clearResult();
 }
 function renderRetainedArtifact(record) {
@@ -146,8 +149,17 @@ function render(action, data) {
     graphPreparedKind = action === "graphPrepareBrowse" ? "browse" : "acquire";
     byId("graph-kind").value = graphPreparedKind;
   }
-  if (action === "graphStatus" && success) {
-    byId("status").textContent = "Graph status inspected. Reconcile the result before starting another attempt.";
+  if (["graphStatus", "graphWatch"].includes(action) && success) {
+    byId("status").textContent = action === "graphWatch"
+      ? "Graph watch advanced. Reconcile the result before starting another attempt."
+      : "Graph status inspected. Reconcile the result before starting another attempt.";
+  }
+  if (["graphPrepareBrowse", "graphPrepareAcquire", "graphSubmitBrowse", "graphSubmitAcquire", "graphStatus", "graphWatch"].includes(action) && success) {
+    if (typeof data.scopeId === "string") byId("graph-scope-id").value = data.scopeId;
+    if (typeof data.invocationRef === "string") byId("graph-invocation-ref").value = data.invocationRef;
+    if (data.graphNextCursor && typeof data.graphNextCursor === "object") {
+      byId("graph-cursor").value = JSON.stringify(data.graphNextCursor);
+    }
   }
   if (["browse", "assets"].includes(action)) {
     byId("pagination").hidden = !continuationToken;
@@ -289,16 +301,50 @@ function graphAcquirePayload() {
     publication: publicationPayload()
   };
 }
+function graphRecoveryPayload({includeCursor = false} = {}) {
+  const scopeId = byId("graph-scope-id").value.trim();
+  const invocationRef = byId("graph-invocation-ref").value.trim();
+  if ((scopeId && !invocationRef) || (!scopeId && invocationRef)) {
+    return {error: "graph_recovery_fields_required"};
+  }
+  const payload = {graphKind: byId("graph-kind").value};
+  if (scopeId) {
+    payload.graphScopeId = scopeId;
+    payload.graphInvocationRef = invocationRef;
+  }
+  if (includeCursor) {
+    const text = byId("graph-cursor").value.trim();
+    if (text) {
+      try {
+        payload.graphCursor = JSON.parse(text);
+      } catch (_) {
+        return {error: "graph_cursor_invalid"};
+      }
+    }
+  }
+  return {payload};
+}
 byId("graph-prepare-browse").addEventListener("click", () => run("graphPrepareBrowse", graphBrowsePayload()));
 byId("graph-prepare-acquire").addEventListener("click", () => run("graphPrepareAcquire", graphAcquirePayload()));
 byId("graph-submit").addEventListener("click", () => {
   if (!graphPreparedKind) return render("graphSubmit", {isSuccess: false, reasonCodes: ["graph_not_prepared"]});
   run(graphPreparedKind === "browse" ? "graphSubmitBrowse" : "graphSubmitAcquire", {graphKind: graphPreparedKind});
 });
-byId("graph-status").addEventListener("click", () => run("graphStatus", {graphKind: byId("graph-kind").value}));
+byId("graph-status").addEventListener("click", () => {
+  const recovery = graphRecoveryPayload();
+  if (recovery.error) return render("graphStatus", {isSuccess: false, reasonCodes: [recovery.error]});
+  run("graphStatus", recovery.payload);
+});
+byId("graph-watch").addEventListener("click", () => {
+  const recovery = graphRecoveryPayload({includeCursor: true});
+  if (recovery.error) return render("graphWatch", {isSuccess: false, reasonCodes: [recovery.error]});
+  run("graphWatch", recovery.payload);
+});
 byId("graph-cancel").addEventListener("click", () => {
   const idempotencyKey = byId("graph-cancel-idempotency").value.trim();
-  if (!idempotencyKey) return render("graphCancel", {isSuccess: false, reasonCodes: ["graph_cancel_idempotency_key_required"]});
+  if (!/^[A-Za-z0-9._:-]{1,128}$/.test(idempotencyKey)) {
+    return render("graphCancel", {isSuccess: false, reasonCodes: ["graph_cancel_idempotency_key_required"]});
+  }
   run("graphCancel", {graphKind: byId("graph-kind").value, idempotencyKey});
 });
 fetch("/session", {credentials: "same-origin"}).then(response => {

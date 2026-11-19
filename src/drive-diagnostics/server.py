@@ -13,7 +13,7 @@ ACTIONS = frozenset((
     "browse", "acquire", "inspect", "verifiedRead", "verify", "materialize",
     "release", "delete", "revoke", "graph",
     "graphPrepareBrowse", "graphPrepareAcquire", "graphSubmitBrowse", "graphSubmitAcquire",
-    "graphStatus", "graphCancel",
+    "graphStatus", "graphWatch", "graphCancel",
 ))
 PAYLOAD_KEYS = frozenset((
     "connectionId", "collectionRef", "assetId", "selectionRef", "opaqueSelectionRef",
@@ -21,7 +21,7 @@ PAYLOAD_KEYS = frozenset((
     "maximumBytes", "maximumDurationSeconds", "publication",
     "retainedArtifactId", "artifactId", "operationRef", "graphInvocationRef",
     "purpose", "relativeOutputPath", "idempotencyKey", "sessionId", "correlationId", "traceparent",
-    "graphKind", "explicitRetry",
+    "graphKind", "graphScopeId", "graphCursor", "explicitRetry",
 ))
 _NUMERIC_PAYLOAD_KEYS = frozenset(("pageSize", "maximumBytes", "maximumDurationSeconds"))
 _PUBLICATION_KEYS = frozenset((
@@ -57,6 +57,19 @@ def _valid_payload(payload):
             continue
         if key == "graphKind":
             if not isinstance(value, str) or value not in {"browse", "acquire"}:
+                return False
+            continue
+        if key == "graphScopeId":
+            if not isinstance(value, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,255}", value):
+                return False
+            continue
+        if key == "graphCursor":
+            if not isinstance(value, dict):
+                return False
+            try:
+                if len(json.dumps(value, separators=(",", ":"), ensure_ascii=False).encode("utf-8")) > 1024 * 1024:
+                    return False
+            except (TypeError, ValueError):
                 return False
             continue
         if key in _NUMERIC_PAYLOAD_KEYS:
@@ -204,6 +217,14 @@ def make_server(client, port=8765):
                 return self.reject(400)
             try:
                 result = client.execute(request["action"], payload)
+            except ValueError as error:
+                # DriveClientError is a sanitized, UI-safe validation reason.
+                # Preserve it so the browser can correct the request, while
+                # keeping arbitrary exception text out of the response.
+                reason = str(error)
+                if not re.fullmatch(r"[a-z0-9][a-z0-9_:-]{0,127}", reason):
+                    reason = "diagnostic_request_failed"
+                result = {"isSuccess": False, "reasonCodes": [reason]}
             except Exception:
                 result = {"isSuccess": False, "reasonCodes": ["diagnostic_request_failed"]}
             self.send_body(200, result)

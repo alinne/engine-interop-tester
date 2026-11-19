@@ -207,6 +207,29 @@ class ServerTests(unittest.TestCase):
             self.assertTrue(json.load(response)["isSuccess"])
         self.assertEqual([("graphCancel", payload["payload"])], self.client.calls)
 
+    def test_graph_watch_accepts_bounded_cursor_and_scope_handle(self):
+        csrf = self.bootstrap()
+        cursor = {
+            "contractVersion": 1,
+            "scope": {"tenantId": "tenant", "scopeId": "scope"},
+            "jobCursors": [{"schemaVersion": 1, "job": {"jobId": "job"}, "afterSequence": 0}],
+        }
+        payload = {"action": "graphWatch", "payload": {
+            "graphKind": "browse", "graphScopeId": "scope",
+            "graphInvocationRef": "a" * 64, "graphCursor": cursor,
+        }}
+        with self.post(payload, csrf=csrf) as response:
+            self.assertTrue(json.load(response)["isSuccess"])
+        self.assertEqual([("graphWatch", payload["payload"])], self.client.calls)
+
+    def test_graph_watch_rejects_unstructured_cursor_before_client(self):
+        csrf = self.bootstrap()
+        with self.assertRaises(HTTPError) as error:
+            self.post({"action": "graphWatch", "payload": {"graphCursor": "not-json-object"}}, csrf=csrf)
+        self.assertEqual(400, error.exception.code)
+        error.exception.close()
+        self.assertEqual([], self.client.calls)
+
     def test_graph_cancel_rejects_unknown_control_plan_or_non_string_intent(self):
         csrf = self.bootstrap()
         for payload in ({"graphKind": "browse", "controlPlan": {"operation": "cancel"}},
@@ -278,6 +301,14 @@ class ServerTests(unittest.TestCase):
             body = response.read().decode()
         self.assertNotIn("private", body)
         self.assertIn("diagnostic_request_failed", body)
+
+    def test_sanitized_client_validation_reason_reaches_ui(self):
+        self.client.execute = lambda action, payload: (_ for _ in ()).throw(ValueError("graph_cancel_idempotency_key_required"))
+        csrf = self.bootstrap()
+        with self.post({"action": "graphCancel", "payload": {"graphKind": "browse", "idempotencyKey": "cancel-1"}}, csrf=csrf) as response:
+            body = response.read().decode()
+        self.assertIn("graph_cancel_idempotency_key_required", body)
+        self.assertNotIn("ValueError", body)
 
 
 if __name__ == "__main__":

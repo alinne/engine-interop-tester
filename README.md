@@ -5,8 +5,9 @@ Consumer connectivity test apps for Engine interop validation across platforms.
 This repository is an internal-only validation shell. Reusable interop/session/clock/runtime logic must live in `linnaeus-engine`; this repo should stay focused on test UX, scripts, and evidence capture.
 
 ## Targets
-- Google Drive: local browser diagnostic (`src/drive-diagnostics`); see
-  [setup, supported actions and remaining qualification](docs/drive-diagnostics.md).
+- Google Drive: local browser diagnostic (`src/drive-diagnostics`) for owner-scoped connection,
+  browse, and retained-artifact lifecycle checks; see [setup, supported actions and remaining
+  qualification](docs/drive-diagnostics.md).
 - Windows: WinUI 3 app (`src/windows/EngineInteropTester.WinUI`)
 - macOS: SwiftUI app (`src/macos/EngineInteropTester.AppleUX`)
 

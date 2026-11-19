@@ -1,6 +1,6 @@
 {
   "sourceRepository": "alinne/linnaeus-engine",
-  "sourceCommit": "b87f8d7b2e351e1d3c01afe8ef8bc7c9453c3ca2",
+  "sourceCommit": "eff44be39851b3fc4142f4a2536cf435b4b4faf0",
   "sourceHashes": {
     "src/Linnaeus.Engine.ModelFabric.Contracts/EngineControlApiRoutes.cs": "c7a13afa0d235e04b9fa1d0de50e6c85914e0174c810dbce2408386b486dc869",
     "src/Linnaeus.Engine.ModelFabric.Contracts/EngineControlApiRoutes.Media.cs": "024d79c3f57fa973453db823373f53bdb2278b161bc0ef379ca38bef7e03a3b9",
@@ -80,6 +80,12 @@
       "operationId": "graph-job.observation.status",
       "method": "GET",
       "path": "/engine/v1/graph-jobs/tenants/{tenantId}/scopes/{scopeId}/invocations/{invocationRef}/status",
+      "visibility": "stable"
+    },
+    "graphWatch": {
+      "operationId": "graph-job.observation.watch",
+      "method": "POST",
+      "path": "/engine/v1/graph-jobs/tenants/{tenantId}/scopes/{scopeId}/invocations/{invocationRef}/watch",
       "visibility": "stable"
     },
     "graphCancel": {

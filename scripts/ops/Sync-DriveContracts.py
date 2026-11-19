@@ -17,15 +17,15 @@ SELECTION = {
 }
 # Optional consumer capabilities are projected only when their declarations
 # and catalog entries exist in the selected committed Engine source.  The
-# current pinned source intentionally has none of these entries; this table
-# therefore cannot manufacture routes while the parent Engine change is
-# uncommitted.
+# selected source determines availability; this table cannot manufacture
+# routes while a parent Engine change is uncommitted.
 OPTIONAL_SELECTION = {
     "graphPrepareBrowse": ("ExternalMediaGraph", "PrepareBrowseTemplate", "external-media.graph.prepare-browse"),
     "graphPrepareAcquire": ("ExternalMediaGraph", "PrepareAcquireRetainedTemplate", "external-media.graph.prepare-acquire-retained"),
     "graphSubmitBrowse": ("ExternalMediaGraph", "BrowseTemplate", "external-media.graph.browse"),
     "graphSubmitAcquire": ("ExternalMediaGraph", "AcquireRetainedTemplate", "external-media.graph.acquire-retained"),
     "graphStatus": ("GraphJobs", "StatusTemplate", "graph-job.observation.status"),
+    "graphWatch": ("GraphJobs", "WatchTemplate", "graph-job.observation.watch"),
     "graphCancel": ("GraphJobs", "CancelTemplate", "graph-job.control.cancel"),
     "browse": ("Cloud", "MediaBrowse", "cloud.media.browse"),
     "acquire": ("Cloud", "MediaAcquireRetained", "cloud.media.acquire-retained"),

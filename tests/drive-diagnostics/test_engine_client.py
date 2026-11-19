@@ -32,6 +32,8 @@ CONTRACTS = {
         "connections": {"method": "GET", "path": "/connections"},
         "collections": {"method": "POST", "path": "/collections"},
         "assets": {"method": "POST", "path": "/assets"},
+        "browse": {"method": "POST", "path": "/cloud/media:browse"},
+        "graphCancel": {"method": "POST", "path": "/graph/cancel"},
         "callback": {"method": "GET", "path": "/callback/{providerId}"},
     }
 }
@@ -111,6 +113,19 @@ class EngineHandler(BaseHTTPRequestHandler):
         EngineHandler.calls.append(("POST", self.path, body))
         if EngineHandler.mode == "semantic-fail":
             self._reply(200, {"isSuccess": False, "reasonCodes": ["permission_denied"], "secret": "must-not-leak"})
+            return
+        if EngineHandler.mode == "wrapped-semantic-fail":
+            self._reply(200, {
+                "isSuccess": False,
+                "connectionId": "conn-1",
+                "result": {
+                    "isSuccess": False,
+                    "collections": [],
+                    "assets": [],
+                    "reasonCodes": ["cloud_credentials_refresh_failed"],
+                    "providerPayload": {"accessToken": "must-not-leak"},
+                },
+            })
             return
         if self.path == "/start":
             self._reply(200, {"isSuccess": True, "providerId": "google-drive", "state": "opaque-state", "status": "pending", "authorizationUrl": "https://accounts.google.com/o/oauth2/v2/auth?client_id=test"})
@@ -369,10 +384,54 @@ class DriveClientTests(unittest.TestCase):
         self.assertEqual(result["reasonCodes"], ["permission_denied"])
         self.assertNotIn("secret", result)
 
+    def test_cloud_operation_wrapper_preserves_nested_failure_reason_without_payload(self):
+        client = self.client()
+        client.execute("connections")
+        EngineHandler.mode = "wrapped-semantic-fail"
+        result = client.execute("browse", {"connectionId": "conn-1", "locationKind": "my_drive_root"})
+        self.assertFalse(result["isSuccess"])
+        self.assertEqual(["cloud_credentials_refresh_failed"], result["reasonCodes"])
+        self.assertNotIn("providerPayload", result)
+        self.assertNotIn("accessToken", json.dumps(result))
+
+    def test_cloud_operation_wrappers_only_use_nested_reasons_for_explicit_failure(self):
+        failure = {
+            "isSuccess": False,
+            "result": {"isSuccess": False, "reasonCodes": ["cloud_credentials_refresh_failed"]},
+        }
+        success = {
+            "isSuccess": True,
+            "result": {"isSuccess": False, "reasonCodes": ["must_not_become_failure"]},
+        }
+        for action in ("browse", "acquire", "collections", "assets", "inspect", "verify", "materialize", "release", "delete"):
+            with self.subTest(action=action):
+                self.assertEqual(["cloud_credentials_refresh_failed"], DriveClient._sanitize(action, failure)["reasonCodes"])
+                self.assertEqual([], DriveClient._sanitize(action, success)["reasonCodes"])
+
     def test_string_success_flag_is_not_truthy(self):
         EngineHandler.mode = "string-success"
         result = self.client().execute("readiness")
         self.assertFalse(result["isSuccess"])
+
+    def test_graph_cancel_idempotency_key_matches_engine_contract_before_network(self):
+        client = self.client()
+        client._graph_bindings["browse"] = {
+            "scopeId": "scope-cancel",
+            "invocationRef": "i" * 64,
+            "connectionId": "conn-1",
+        }
+        invalid = ("", "x" * 129, "contains/slash", "contains space", "unicode-\N{SNOWMAN}")
+        with mock.patch.object(client, "_request") as request:
+            for value in invalid:
+                with self.subTest(value=value):
+                    with self.assertRaisesRegex(DriveClientError, "graph_cancel_idempotency_key_required"):
+                        client.execute("graphCancel", {"graphKind": "browse", "idempotencyKey": value})
+            request.assert_not_called()
+
+        with mock.patch.object(client, "_request", return_value={"isSuccess": True, "operation": "cancel", "status": "Cancelling"}) as request:
+            result = client.execute("graphCancel", {"graphKind": "browse", "idempotencyKey": "v" * 128})
+        self.assertTrue(result["isSuccess"])
+        self.assertEqual({"idempotencyKey": "v" * 128}, request.call_args.kwargs["body"])
 
     def test_connection_refresh_replaces_and_invalidates_old_bindings(self):
         client = self.client()
