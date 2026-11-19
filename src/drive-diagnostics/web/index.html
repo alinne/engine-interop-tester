@@ -55,7 +55,6 @@
 <option value="my-drive">My Drive</option>
 <option value="shared-with-me">Shared with me</option>
 <option value="shared-drives">Shared drives</option>
-<option value="shared-drive-folder">Selected shared-drive folder</option>
 </select>
 </div>
 <p class="hint">Browse is metadata-only. The location and continuation cursor stay bound to the selected Engine connection; provider IDs and resource keys remain inside Engine.</p>
@@ -64,7 +63,7 @@
 <select id="folder">
 <option value="">Choose a connection first</option>
 </select>
-<button id="files">List files in selected folder (compatibility)</button>
+<button id="open-folder">Open selected folder</button>
 <button id="next-page" hidden>Load next page</button>
 <div id="pagination" class="notice" hidden>Engine returned a continuation cursor. Continue only within this connection and view.</div>
 <div class="table-scroll">

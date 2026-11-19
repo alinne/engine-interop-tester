@@ -68,6 +68,7 @@ function changeBrowseView() {
   // A folder reference is scoped to the previous view; retaining it would
   // send a valid opaque ID with the wrong location and create a stale listing.
   byId("folder").replaceChildren(new Option("Browse to load folders", ""));
+  folderRecords = new Map();
   invalidateBrowseContext();
 }
 function fillSelect(id, items, key, label) {
@@ -78,8 +79,7 @@ function fillSelect(id, items, key, label) {
 const LOCATION_KINDS = {
   "my-drive": "my_drive_root",
   "shared-with-me": "shared_with_me",
-  "shared-drives": "shared_drives",
-  "shared-drive-folder": "folder"
+  "shared-drives": "shared_drives"
 };
 function publicationPayload() {
   const list = value => value.split(",").map(item => item.trim()).filter(Boolean);
@@ -280,15 +280,31 @@ byId("artifact-id").addEventListener("input", () => {
 });
 byId("view").addEventListener("change", changeBrowseView);
 byId("folder").addEventListener("change", invalidateBrowseContext);
-byId("files").addEventListener("click", () => run("assets", {connectionId: connectionId(), collectionRef: byId("folder").value}));
+function selectedFolderBrowsePayload() {
+  const connection = connectionId();
+  const selectedRef = byId("folder").value;
+  const folder = folderRecords.get(selectedRef);
+  const folderRef = folder?.collectionRef || folder?.collectionId;
+  if (!connection || !selectedRef || !folder || folderRef !== selectedRef) return null;
+  const payload = {
+    connectionId: connection,
+    locationKind: folder.kind === "shared_drive" ? "shared_drive" : "folder",
+    locationRef: folderRef
+  };
+  if (typeof folder.driveId === "string" && folder.driveId) payload.driveId = folder.driveId;
+  return payload;
+}
+function openSelectedFolder() {
+  const payload = selectedFolderBrowsePayload();
+  if (!payload) return render("openFolder", {isSuccess: false, reasonCodes: ["folder_selection_required"]});
+  browseContext = payload;
+  return run("browse", payload);
+}
+byId("open-folder").addEventListener("click", openSelectedFolder);
 byId("folders").addEventListener("click", () => {
-  const kind = LOCATION_KINDS[byId("view").value];
-  const folder = folderRecords.get(byId("folder").value);
   browseContext = {
     connectionId: connectionId(),
-    locationKind: kind,
-    ...(folder?.collectionRef || folder?.collectionId ? {locationRef: folder.collectionRef || folder.collectionId} : {}),
-    ...(folder?.driveId ? {driveId: folder.driveId} : {})
+    locationKind: LOCATION_KINDS[byId("view").value] || "my_drive_root"
   };
   run("browse", browseContext);
 });
@@ -324,13 +340,12 @@ byId("revoke").addEventListener("click", () => {
   if (connectionId() && window.confirm("Revoke this selected Google Drive connection?")) run("revoke", {connectionId: connectionId()});
 });
 function graphBrowsePayload() {
-  const folder = folderRecords.get(byId("folder").value);
+  const location = browseContext || {locationKind: LOCATION_KINDS[byId("view").value] || "my_drive_root"};
   return {
     connectionId: connectionId(),
-    locationKind: browseContext?.locationKind || LOCATION_KINDS[byId("view").value] || "my_drive_root",
-    ...(browseContext?.locationRef || folder?.collectionRef || folder?.collectionId
-      ? {locationRef: browseContext?.locationRef || folder.collectionRef || folder.collectionId} : {}),
-    ...(browseContext?.driveId || folder?.driveId ? {driveId: browseContext?.driveId || folder.driveId} : {})
+    locationKind: location.locationKind,
+    ...(location.locationRef ? {locationRef: location.locationRef} : {}),
+    ...(location.driveId ? {driveId: location.driveId} : {})
   };
 }
 function graphAcquirePayload() {

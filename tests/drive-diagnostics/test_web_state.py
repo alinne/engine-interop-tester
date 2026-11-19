@@ -48,8 +48,13 @@ assert.equal(element('selection').textContent, 'Select one downloadable file.');
 
     def test_browse_cursor_is_invalidated_when_view_changes(self):
         source = (Path(__file__).parents[2] / "src/drive-diagnostics/web/app.js").read_text(encoding="utf-8")
+        page = (Path(__file__).parents[2] / "src/drive-diagnostics/web/index.html").read_text(encoding="utf-8")
         self.assertIn('byId("view").addEventListener("change", changeBrowseView)', source)
         self.assertIn('byId("folder").replaceChildren(new Option("Browse to load folders", ""))', source)
+        self.assertIn('byId("open-folder").addEventListener("click", openSelectedFolder)', source)
+        self.assertIn('id="open-folder"', page)
+        self.assertNotIn('id="files"', page)
+        self.assertNotIn('shared-drive-folder', page)
         self.assertIn('run("browse", {...browseContext, continuationToken})', source)
         self.assertIn('clearFiles({resetBrowse: false, clearArtifact: true})', source)
         self.assertIn('clearFiles({clearArtifact: true});', source)
@@ -73,6 +78,125 @@ assert.equal(element('selection').textContent, 'Select one downloadable file.');
         self.assertIn('retainedArtifact = null;', source)
         self.assertIn('retainedArtifactDetails = null;', source)
         self.assertIn('if (retainedArtifact && typed !== retainedArtifact)', source)
+
+    def test_open_selected_folder_uses_current_engine_folder_binding(self):
+        script = r"""
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const vm = require('node:vm');
+const elements = new Map();
+const listeners = new Map();
+const requests = [];
+function element(id) {
+  if (!elements.has(id)) elements.set(id, {
+    value: '', hidden: false, href: '', textContent: '', children: [], dataset: {},
+    addEventListener(type, callback) { listeners.set(`${id}:${type}`, callback); },
+    add(child) { this.children.push(child); },
+    append(...children) { this.children.push(...children); },
+    replaceChildren(...children) { this.children = children; this.value = ''; },
+    removeAttribute(name) { delete this[name]; },
+  });
+  return elements.get(id);
+}
+const context = vm.createContext({
+  document: { getElementById: element, querySelectorAll: () => [] },
+  Option: function(text, value) { this.text = text; this.value = value; },
+  fetch: (url, options) => url === '/session'
+    ? Promise.resolve({ok: true, json: async () => ({csrf: 'test'})})
+    : (requests.push(JSON.parse(options.body)), Promise.resolve({ok: true, json: async () => ({isSuccess: false})})),
+  URL,
+});
+vm.runInContext(fs.readFileSync(process.argv[1], 'utf8'), context);
+(async () => {
+  const folderRef = 'cloud-selection:connection-1:folder-1';
+  context.render('browse', {
+    isSuccess: true,
+    collections: [{collectionRef: folderRef, displayName: 'Shared study', kind: 'folder', driveId: 'drive-1'}],
+    assets: [],
+  });
+  element('connection').value = 'connection-1';
+  element('folder').value = folderRef;
+  const graphPayload = context.graphBrowsePayload();
+  assert.equal(graphPayload.connectionId, 'connection-1');
+  assert.equal(graphPayload.locationKind, 'my_drive_root');
+  assert.equal(graphPayload.locationRef, undefined);
+  await listeners.get('open-folder:click')();
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].action, 'browse');
+  assert.deepEqual(requests[0].payload, {
+    connectionId: 'connection-1',
+    locationKind: 'folder',
+    locationRef: folderRef,
+    driveId: 'drive-1',
+  });
+  const driveRef = 'cloud-selection:connection-1:drive-1';
+  context.render('browse', {
+    isSuccess: true,
+    collections: [{collectionRef: driveRef, displayName: 'Shared drive', kind: 'shared_drive', driveId: 'drive-1'}],
+    assets: [],
+  });
+  element('folder').value = driveRef;
+  await listeners.get('open-folder:click')();
+  assert.equal(requests[1].payload.locationKind, 'shared_drive');
+})().catch(error => { console.error(error); process.exitCode = 1; });
+"""
+        app = Path(__file__).parents[2] / "src/drive-diagnostics/web/app.js"
+        result = subprocess.run(["node", "-e", script, str(app)], capture_output=True, text=True)
+        self.assertEqual(0, result.returncode, result.stderr)
+
+    def test_view_and_account_changes_clear_folder_binding_before_open(self):
+        script = r"""
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const vm = require('node:vm');
+const elements = new Map();
+const listeners = new Map();
+const requests = [];
+function element(id) {
+  if (!elements.has(id)) elements.set(id, {
+    value: '', hidden: false, href: '', textContent: '', children: [], dataset: {},
+    addEventListener(type, callback) { listeners.set(`${id}:${type}`, callback); },
+    add(child) { this.children.push(child); },
+    append(...children) { this.children.push(...children); },
+    replaceChildren(...children) { this.children = children; this.value = ''; },
+    removeAttribute(name) { delete this[name]; },
+  });
+  return elements.get(id);
+}
+const context = vm.createContext({
+  document: { getElementById: element, querySelectorAll: () => [] },
+  Option: function(text, value) { this.text = text; this.value = value; },
+  fetch: (url, options) => url === '/session'
+    ? Promise.resolve({ok: true, json: async () => ({csrf: 'test'})})
+    : (requests.push(JSON.parse(options.body)), Promise.resolve({ok: true, json: async () => ({isSuccess: false})})),
+  URL,
+});
+vm.runInContext(fs.readFileSync(process.argv[1], 'utf8'), context);
+(async () => {
+  const folderRef = 'cloud-selection:connection-1:folder-1';
+  context.render('browse', {
+    isSuccess: true,
+    collections: [{collectionRef: folderRef, displayName: 'Shared study', driveId: 'drive-1'}],
+    assets: [],
+  });
+  element('connection').value = 'connection-1';
+  element('folder').value = folderRef;
+  listeners.get('view:change')();
+  assert.equal(element('folder').value, '');
+  assert.equal(element('folder').children[0].text, 'Browse to load folders');
+  element('folder').value = folderRef;
+  await listeners.get('open-folder:click')();
+  assert.equal(requests.length, 0);
+
+  element('connection').value = 'connection-2';
+  listeners.get('connection:change')();
+  assert.equal(element('folder').value, '');
+  assert.equal(element('assets').children.length, 0);
+})().catch(error => { console.error(error); process.exitCode = 1; });
+"""
+        app = Path(__file__).parents[2] / "src/drive-diagnostics/web/app.js"
+        result = subprocess.run(["node", "-e", script, str(app)], capture_output=True, text=True)
+        self.assertEqual(0, result.returncode, result.stderr)
 
     def test_asset_selection_allows_downloadable_binary_files_but_not_workspace_files(self):
         script = r"""
