@@ -34,21 +34,29 @@ remains enabled, redirects are rejected, environment proxies are disabled, and r
    this app performs no provider token exchange.
 3. Load the owner's operational Google Drive connections. A callback's connected record alone is not
    treated as proof that the operational connection registry is ready.
-4. Select a connection and list folders and files using Engine's currently available legacy routes.
-   Returned continuation cursors are shown as incomplete listings; no complete-inventory claim follows.
-5. Select one ISO/DICOM candidate and inspect acquisition availability. Acquisition fails explicitly
-   until a qualified Engine retained-source operation is exposed. The unsafe legacy public import path
-   is deliberately not invoked to manufacture a successful file-opening demonstration.
+4. Select a connection and browse My Drive, Shared with me, Shared drives, or a selected shared-drive
+   folder through the optional canonical browse projection. Continuation cursors are sent back only
+   with the same connection and view. The legacy folder/file routes remain available for comparison.
+5. Select one ISO/DICOM candidate and explicitly acquire it through the retained-source operation,
+   then inspect, verify, materialize, or release the returned opaque artifact reference when those
+   optional routes are projected. The UI never auto-acquires, opens bytes, or falls back to the legacy
+   public import path. Provider resource keys, raw refs, local paths and content are removed from the
+   browser projection.
+6. Revoke a selected connection only after an explicit confirmation. The graph/node probe is a
+   capability check only; it remains unavailable until a committed Engine graph contract exposes the
+   canonical invocation route.
 
-Dedicated My Drive, Shared with me and Shared drives views, continuation, verified acquisition,
-progress/cancel/retry/recovery, source release, and ISO/DICOM opening remain Engine integration gaps.
-Those disabled/unavailable paths are requirements, not completed implementation.
+The current pinned Engine commit predates these optional route declarations, so the new actions report
+`capability_unavailable` until contracts are regenerated from the later committed Engine source. This
+is intentional: the tester never fabricates a route from an uncommitted Engine worktree. Progress,
+cancel/retry/recovery and ISO/DICOM opening remain Engine/app integration work beyond this diagnostic.
 
 ## Contract authority and proof
 
-`src/drive-diagnostics/contracts.json` is a generated consumer projection of seven Engine route
-declarations. It retains the selected source commit and SHA-256 for the three source files. Refresh
-only from committed Engine source, review the projection, then run:
+`src/drive-diagnostics/contracts.json` is a generated consumer projection of the seven baseline Engine
+route declarations plus any optional browse/retained-artifact declarations present in the selected
+committed source. It retains the selected source commit and SHA-256 for every projected source file.
+Refresh only from committed Engine source, review the projection, then run:
 
 ```sh
 PYTHONDONTWRITEBYTECODE=1 python3 scripts/ops/Sync-DriveContracts.py --engine-root /path/to/engine
@@ -109,7 +117,7 @@ no paid-service execution route. Operation evidence/replay remains the complianc
 
 ## November 18 baseline checks
 
-The focused verifier passed 32 synthetic tests, JavaScript syntax, consumer-boundary checks and
+The focused verifier passed 48 synthetic tests, JavaScript syntax, consumer-boundary checks and
 projection comparison against the selected committed Engine source. Desktop (1280 px) and mobile
 (390 px) browser inspection passed, including an actual click returning
 `diagnostic_configuration_required` with no configured Engine. No Google account or credentials were

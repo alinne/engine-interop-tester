@@ -1,17 +1,41 @@
 "use strict";
 let csrf = "";
 let selected = null;
+let retainedArtifact = null;
+let continuationToken = null;
+let browseContext = null;
 const byId = id => document.getElementById(id);
 const connectionId = () => byId("connection").value;
-function clearFiles() {
+function clearResult(message = "Selection changed. Run an action to refresh the diagnostic result.") {
+  byId("status").dataset.failed = "false";
+  byId("status").textContent = message;
+  byId("result").textContent = "No current result.";
+}
+function clearFiles({resetBrowse = true, clearArtifact = false} = {}) {
   selected = null;
   byId("selection").textContent = "Select one ISO or DICOM file.";
   byId("assets").replaceChildren();
   byId("pagination").hidden = true;
+  byId("next-page").hidden = true;
+  continuationToken = null;
+  if (resetBrowse) browseContext = null;
+  if (clearArtifact) retainedArtifact = null;
 }
-function resetFolders() {
+function resetFolders({clearResult: resetResult = false} = {}) {
   byId("folder").replaceChildren(new Option("Load folders for this connection", ""));
-  clearFiles();
+  clearFiles({clearArtifact: true});
+  retainedArtifact = null;
+  if (resetResult) clearResult();
+}
+function invalidateBrowseContext() {
+  clearFiles({clearArtifact: true});
+  clearResult();
+}
+function changeBrowseView() {
+  // A folder reference is scoped to the previous view; retaining it would
+  // send a valid opaque ID with the wrong location and create a stale listing.
+  byId("folder").replaceChildren(new Option("Browse to load folders", ""));
+  invalidateBrowseContext();
 }
 function fillSelect(id, items, key, label) {
   const element = byId(id);
@@ -40,13 +64,33 @@ function render(action, data) {
     resetFolders();
     fillSelect("connection", success ? data.connections || [] : [], "connectionId", "connectionId");
   }
+  if (action === "browse") {
+    clearFiles({resetBrowse: false, clearArtifact: true});
+    const collections = success ? data.collections || [] : [];
+    fillSelect("folder", collections, "collectionRef", "displayName");
+    if (success && browseContext?.collectionRef) byId("folder").value = browseContext.collectionRef;
+    renderAssets(success ? (data.assets || data.items || []) : []);
+    continuationToken = success ? (data.continuationToken || data.nextPageToken || null) : null;
+    if (!success) browseContext = null;
+  }
   if (action === "collections") {
     clearFiles();
     fillSelect("folder", success ? data.collections || [] : [], "collectionId", "displayName");
   }
   if (action === "assets") {
-    clearFiles();
-    for (const asset of success ? data.assets || [] : []) {
+    clearFiles({clearArtifact: true});
+    renderAssets(success ? data.assets || [] : []);
+  }
+  if (["acquire", "materialize"].includes(action) && success) {
+    retainedArtifact = data.retainedArtifactId || data.artifactId || data.artifacts?.[0]?.retainedArtifactId || data.artifacts?.[0]?.artifactId || null;
+  }
+  if (["browse", "assets"].includes(action)) {
+    byId("pagination").hidden = !continuationToken;
+    byId("next-page").hidden = !continuationToken;
+  }
+}
+function renderAssets(assets) {
+  for (const asset of assets) {
       const row = document.createElement("tr");
       const choose = document.createElement("input");
       choose.type = "radio";
@@ -65,13 +109,11 @@ function render(action, data) {
         row.append(cell);
       }
       byId("assets").append(row);
-    }
   }
-  if (action === "assets" || action === "collections") byId("pagination").hidden = !(data.hasMore || data.changeCursor || data.nextPageToken || data.continuationToken || data.incomplete);
 }
 async function run(action, payload = {}) {
   if (action === "start") {
-    resetFolders();
+    resetFolders({clearResult: true});
     fillSelect("connection", [], "connectionId", "connectionId");
     byId("consent").hidden = true;
     byId("consent").removeAttribute("href");
@@ -92,11 +134,31 @@ async function run(action, payload = {}) {
   }
 }
 document.querySelectorAll("[data-action]").forEach(button => button.addEventListener("click", () => run(button.dataset.action)));
-byId("connection").addEventListener("change", resetFolders);
-byId("folder").addEventListener("change", clearFiles);
-byId("folders").addEventListener("click", () => run("collections", {connectionId: connectionId()}));
+byId("connection").addEventListener("change", () => resetFolders({clearResult: true}));
+byId("view").addEventListener("change", changeBrowseView);
+byId("folder").addEventListener("change", invalidateBrowseContext);
 byId("files").addEventListener("click", () => run("assets", {connectionId: connectionId(), collectionRef: byId("folder").value}));
+byId("folders").addEventListener("click", () => {
+  browseContext = {
+    connectionId: connectionId(),
+    view: byId("view").value,
+    ...(byId("folder").value ? {collectionRef: byId("folder").value} : {})
+  };
+  run("browse", browseContext);
+});
+byId("next-page").addEventListener("click", () => {
+  if (!browseContext || !continuationToken) return;
+  run("browse", {...browseContext, continuationToken});
+});
 byId("acquire").addEventListener("click", () => run("acquire", {connectionId: connectionId(), assetId: selected?.assetId || ""}));
+byId("inspect").addEventListener("click", () => run("inspect", {connectionId: connectionId(), retainedArtifactId: retainedArtifact || ""}));
+byId("verify").addEventListener("click", () => run("verify", {connectionId: connectionId(), retainedArtifactId: retainedArtifact || ""}));
+byId("materialize").addEventListener("click", () => run("materialize", {connectionId: connectionId(), retainedArtifactId: retainedArtifact || ""}));
+byId("release").addEventListener("click", () => run("release", {connectionId: connectionId(), retainedArtifactId: retainedArtifact || ""}));
+byId("revoke").addEventListener("click", () => {
+  if (connectionId() && window.confirm("Revoke this selected Google Drive connection?")) run("revoke", {connectionId: connectionId()});
+});
+byId("graph").addEventListener("click", () => run("graph", {connectionId: connectionId()}));
 fetch("/session", {credentials: "same-origin"}).then(response => {
   if (!response.ok) throw new Error();
   return response.json();

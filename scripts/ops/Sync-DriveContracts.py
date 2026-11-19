@@ -15,9 +15,26 @@ SELECTION = {
     "assets": ("Cloud", "AssetsList", "cloud.assets.list"),
     "callback": ("CloudMedia", "OAuthCallbackTemplate", "cloud-media.oauth.callback"),
 }
+# Optional consumer capabilities are projected only when their declarations
+# and catalog entries exist in the selected committed Engine source.  The
+# current pinned source intentionally has none of these entries; this table
+# therefore cannot manufacture routes while the parent Engine change is
+# uncommitted.
+OPTIONAL_SELECTION = {
+    "browse": ("Cloud", "MediaBrowse", "cloud.media.browse"),
+    "acquire": ("Cloud", "MediaAcquireRetained", "cloud.media.acquire-retained"),
+    "revoke": ("Cloud", "ConnectionRevokeTemplate", "cloud.connections.revoke"),
+    "inspect": ("MediaArtifactLifecycle", "InspectTemplate", "media.artifacts.inspect"),
+    "verifiedRead": ("MediaArtifactLifecycle", "VerifiedReadTemplate", "media.artifacts.verified-read"),
+    "verify": ("MediaArtifactLifecycle", "VerifyTemplate", "media.artifacts.verify"),
+    "materialize": ("MediaArtifactLifecycle", "MaterializeTemplate", "media.artifacts.materialize"),
+    "release": ("MediaArtifactLifecycle", "TombstoneTemplate", "media.artifacts.tombstone"),
+    "delete": ("MediaArtifactLifecycle", "DeleteTemplate", "media.artifacts.delete"),
+}
 CONTRACT_ROOT = "src/Linnaeus.Engine.ModelFabric.Contracts/"
 SOURCE_FILES = [CONTRACT_ROOT + "EngineControlApiRoutes" + suffix + ".cs"
                 for suffix in ("", ".Media", ".Control")]
+OPTIONAL_SOURCE_FILES = [CONTRACT_ROOT + "EngineControlApiRoutes.MediaArtifactLifecycle.cs"]
 
 
 def project(root, source_commit=None):
@@ -25,7 +42,17 @@ def project(root, source_commit=None):
                                       (source_commit or "HEAD") + "^{commit}"], text=True).strip()
     committed_files = {name: subprocess.check_output(["git", "-C", str(root), "show", f"{commit}:{name}"])
                        for name in SOURCE_FILES}
+    for name in OPTIONAL_SOURCE_FILES:
+        present = subprocess.run(["git", "-C", str(root), "cat-file", "-e", f"{commit}:{name}"],
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
+        if present:
+            committed_files[name] = subprocess.check_output(["git", "-C", str(root), "show", f"{commit}:{name}"])
     files = committed_files if source_commit else {name: (root / name).read_bytes() for name in SOURCE_FILES}
+    if not source_commit:
+        for name in OPTIONAL_SOURCE_FILES:
+            candidate = root / name
+            if candidate.exists():
+                files[name] = candidate.read_bytes()
     if files != committed_files:
         raise ValueError("Contract source has uncommitted changes; select a committed source.")
     catalog = files[SOURCE_FILES[0]].decode("utf-8-sig")
@@ -39,6 +66,18 @@ def project(root, source_commit=None):
         entry = re.search(r'(Stable|Internal)\("' + re.escape(operation_id) + r'", "([A-Z]+)", EngineControlApiRoutes\.' + family + r"\." + member + r"[,)]", catalog)
         if not path or not entry:
             raise ValueError(f"Missing canonical operation: {operation_id}")
+        operations[action] = {"operationId": operation_id, "method": entry[2], "path": path[1],
+                              "visibility": entry[1].lower()}
+    for action, (family, member, operation_id) in OPTIONAL_SELECTION.items():
+        declaration = re.search(r"public static class " + family + r"\s*\{(.*?)\n    \}", all_text, re.S)
+        if not declaration:
+            continue
+        path = re.search(r"public const string " + member + r' = "([^"\r\n]+)";', declaration[1])
+        entry = re.search(r'(Stable|Internal)\("' + re.escape(operation_id) + r'", "([A-Z]+)", EngineControlApiRoutes\.' + family + r"\." + member + r"[,)]", catalog)
+        if not path and not entry:
+            continue
+        if not path or not entry:
+            raise ValueError(f"Missing canonical optional operation: {operation_id}")
         operations[action] = {"operationId": operation_id, "method": entry[2], "path": path[1],
                               "visibility": entry[1].lower()}
     return {"sourceRepository": "alinne/linnaeus-engine", "sourceCommit": commit,
@@ -61,4 +100,4 @@ if __name__ == "__main__":
     else:
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_text(generated)
-        print("Projected seven canonical Engine operations.")
+        print(f"Projected {len(generated and json.loads(generated)['operations'])} canonical Engine operations.")

@@ -7,7 +7,16 @@ import secrets
 from urllib.parse import urlsplit, parse_qs
 
 WEB = Path(__file__).with_name("web")
-ACTIONS = frozenset(("readiness", "start", "status", "connections", "collections", "assets", "acquire"))
+ACTIONS = frozenset((
+    "readiness", "start", "status", "connections", "collections", "assets",
+    "browse", "acquire", "inspect", "verifiedRead", "verify", "materialize",
+    "release", "revoke", "graph",
+))
+PAYLOAD_KEYS = frozenset((
+    "connectionId", "collectionRef", "assetId", "continuationToken", "view",
+    "retainedArtifactId", "artifactId", "operationRef", "graphInvocationRef",
+    "purpose", "sessionId", "correlationId", "traceparent",
+))
 
 
 def make_server(client, port=8765):
@@ -119,9 +128,17 @@ def make_server(client, port=8765):
                         or not isinstance(request.get("action"), str) or request["action"] not in ACTIONS):
                     return self.reject(400, "diagnostic_action_not_allowed")
                 payload = request.get("payload", {})
-                if (not isinstance(payload, dict) or set(payload) - {"connectionId", "collectionRef", "assetId"}
+                if (not isinstance(payload, dict) or set(payload) - PAYLOAD_KEYS
                         or any(not isinstance(value, str) or len(value) > 4096 for value in payload.values())):
                     return self.reject(400)
+                # Browse is metadata-only, and acquisition is always an
+                # explicit selected-asset action.  The bridge never starts an
+                # acquisition from a list response or a missing selection.
+                action = request["action"]
+                if action == "acquire" and not payload.get("assetId"):
+                    return self.reject(400, "asset_selection_required")
+                if action == "browse" and payload.get("view") not in (None, "my-drive", "shared-with-me", "shared-drives", "shared-drive-folder"):
+                    return self.reject(400, "browse_view_invalid")
             except (ValueError, TimeoutError):
                 return self.reject(400)
             try:

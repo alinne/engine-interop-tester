@@ -24,7 +24,20 @@ from typing import Any, Mapping
 _MAX_RESPONSE_BYTES = 1024 * 1024
 _PROVIDER_ID = "google-drive"
 _CONSUMER_HEADER = "X-Linnaeus-Consumer-Id"
-_ACTIONS = ("readiness", "start", "status", "connections", "collections", "assets")
+_ACTIONS = (
+    "readiness", "start", "status", "connections", "collections", "assets",
+    # These are optional until the corresponding committed Engine route is
+    # projected.  Keeping the action names here lets the diagnostic UI remain
+    # useful across Engine contract revisions without inventing a fallback
+    # endpoint or silently using the legacy import path.
+    "browse", "acquire", "inspect", "verifiedRead", "verify", "materialize",
+    "release", "delete", "revoke", "graph",
+)
+_OPTIONAL_ACTIONS = frozenset(_ACTIONS) - frozenset(("readiness", "start", "status", "connections", "collections", "assets"))
+_ACTION_ALIASES = {
+    "access": ("verifiedRead", "inspect"),
+    "release": ("release", "tombstone"),
+}
 _LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1"}
 _SAFE_STATUS_KEYS = {"providerId", "state", "status", "isSuccess", "reasonCodes", "expiresAtUtc"}
 
@@ -105,7 +118,12 @@ class Config:
 
 
 class DriveClient:
-    """Small Engine client for the seven currently published Drive diagnostics."""
+    """Small consumer for projected Engine Drive routes.
+
+    Optional actions are deliberately capability-gated by ``contracts.json``.
+    The tester never synthesizes a route while the Engine source change is
+    pending, and it never acquires content as a side effect of browsing.
+    """
 
     def __init__(self, config: Config, contracts_path: str | os.PathLike[str] | None = None, timeout: float = 10.0) -> None:
         if timeout <= 0 or timeout > 60:
@@ -117,20 +135,28 @@ class DriveClient:
         self._state: str | None = None
         self._connection_ids: set[str] = set()
         self._collection_ids: dict[str, set[str]] = {}
+        self._asset_ids: dict[str, set[str]] = {}
+        self._artifact_ids: dict[str, set[str]] = {}
         self._last_collection_connection: str | None = None
 
     def execute(self, action: str, payload: Mapping[str, Any] | None = None) -> dict[str, Any]:
+        if action == "access":
+            # The reusable diagnostic UI is metadata-only. Do not turn an
+            # ambiguous access request into a binary content read.
+            action = "inspect" if self._has_operation("inspect") else "verifiedRead"
         if action not in _ACTIONS:
-            if action in {"import", "download", "open", "acquire"}:
+            if action in {"import", "download", "open"}:
                 return {"action": action, "isSuccess": False, "reasonCodes": ["capability_unavailable"]}
             raise DriveClientError("unsupported_drive_action")
+        if action in _OPTIONAL_ACTIONS and not self._has_operation(action):
+            return {"action": action, "isSuccess": False, "reasonCodes": ["capability_unavailable"]}
         if action == "start":
             # Starting over may select another Google account. Invalidate the
             # previous attempt before any fallible contract or network work.
             self._state = None
             self._callback_state = None
             self._clear_connection_bindings()
-        operation = self._operation(action)
+        operation = self._operation_for_action(action)
         body: dict[str, Any] | None = None
         query: dict[str, str] = {}
         if action == "readiness":
@@ -149,15 +175,36 @@ class DriveClient:
             query = {"state": self._state}
         elif action == "connections":
             query = self.config.owner_scope
-        elif action in {"collections", "assets"}:
+        elif action in {"collections", "assets", "browse", "acquire", "inspect", "verifiedRead", "verify", "materialize", "release", "delete", "revoke"}:
             body = self._bound_body(action, payload)
+
+        # Artifact access is defined as a GET by the Engine contract. Its
+        # purpose/correlation metadata belongs in the query, never a JSON
+        # body. Keep the bound artifact in route_body so {artifactId} can be
+        # resolved without sending opaque IDs as a request payload.
+        route_body = body
+        if action in {"inspect", "verifiedRead"}:
+            supplied = payload if isinstance(payload, Mapping) else {}
+            purpose = supplied.get("purpose")
+            if purpose is None:
+                purpose = "drive-diagnostics.inspect" if action == "inspect" else "drive-diagnostics.read"
+            if not isinstance(purpose, str) or not purpose or len(purpose) > 128:
+                raise DriveClientError("artifact_access_purpose_invalid")
+            query = {"purpose": purpose}
+            for key in ("sessionId", "correlationId", "traceparent"):
+                value = supplied.get(key)
+                if value is not None:
+                    if not isinstance(value, str) or not value or len(value) > 256:
+                        raise DriveClientError("artifact_access_context_invalid")
+                    query[key] = value
+            body = None
 
         if action == "connections":
             # Treat every refresh attempt as a binding boundary.  A failed or
             # malformed refresh must not leave the UI able to use old refs.
             self._clear_connection_bindings()
-        selected_connection = body.get("connectionId") if isinstance(body, Mapping) else None
-        result = self._request(operation["method"], self._path(operation["path"], action), query=query, body=body)
+        selected_connection = route_body.get("connectionId") if isinstance(route_body, Mapping) else None
+        result = self._request(operation["method"], self._path(operation["path"], action, route_body), query=query, body=body)
         result = self._normalize_published_shape(action, result)
         result = self._sanitize(action, result, selected_connection=selected_connection)
         if action == "start" and result.get("isSuccess"):
@@ -173,6 +220,10 @@ class DriveClient:
         elif action == "collections" and result.get("isSuccess"):
             result = {**result, "connectionId": self._last_collection_connection}
             self._remember_collections(result)
+        elif action in {"assets", "browse"} and result.get("isSuccess"):
+            self._remember_assets(result, selected_connection)
+        elif action in {"acquire", "materialize"} and result.get("isSuccess"):
+            self._remember_artifacts(result, selected_connection)
         return result
 
     def complete_callback(self, parameters: Mapping[str, str]) -> dict[str, Any]:
@@ -248,10 +299,41 @@ class DriveClient:
         except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError) as exc:
             raise DriveClientError("engine_contract_unavailable") from exc
 
-    def _path(self, template: str, action: str) -> str:
-        if "{" in template or "}" in template:
+    def _has_operation(self, action: str) -> bool:
+        try:
+            self._operation_for_action(action)
+            return True
+        except DriveClientError:
+            return False
+
+    def _operation_for_action(self, action: str) -> Mapping[str, str]:
+        candidates = (action,) + tuple(_ACTION_ALIASES.get(action, ()))
+        for candidate in candidates:
+            try:
+                return self._operation(candidate)
+            except DriveClientError:
+                continue
+        raise DriveClientError("engine_contract_unavailable")
+
+    def _path(self, template: str, action: str, body: Mapping[str, Any] | None = None) -> str:
+        if "{" not in template and "}" not in template:
+            return template
+        if not isinstance(body, Mapping):
             raise DriveClientError("engine_contract_path_unsupported")
-        return template
+        replacements = {
+            "connectionId": body.get("connectionId"),
+            "artifactId": body.get("retainedArtifactId") or body.get("artifactId"),
+        }
+        path = template
+        for placeholder, value in replacements.items():
+            token = "{" + placeholder + "}"
+            if token in path:
+                if not isinstance(value, str) or not value:
+                    raise DriveClientError("engine_contract_path_unsupported")
+                path = path.replace(token, urllib.parse.quote(value, safe=""))
+        if "{" in path or "}" in path:
+            raise DriveClientError("engine_contract_path_unsupported")
+        return path
 
     def _bound_body(self, action: str, payload: Mapping[str, Any] | None) -> dict[str, Any]:
         if not isinstance(payload, Mapping):
@@ -262,6 +344,36 @@ class DriveClient:
         body: dict[str, Any] = {"connectionId": connection_id, "ownerScope": self.config.owner_scope}
         if action == "collections":
             self._last_collection_connection = connection_id
+            return body
+        if action in {"browse"}:
+            view = payload.get("view", "my-drive")
+            if not isinstance(view, str) or view not in {"my-drive", "shared-with-me", "shared-drives", "shared-drive-folder"}:
+                raise DriveClientError("browse_view_invalid")
+            body["view"] = view
+            continuation = payload.get("continuationToken")
+            if continuation is not None:
+                if not isinstance(continuation, str) or not continuation:
+                    raise DriveClientError("continuation_token_invalid")
+                body["continuationToken"] = continuation
+            collection_ref = payload.get("collectionRef")
+            if collection_ref is not None:
+                if not isinstance(collection_ref, str) or collection_ref not in self._collection_ids.get(connection_id, set()):
+                    raise DriveClientError("unknown_collection_reference")
+                body["collectionRef"] = collection_ref
+            return body
+        if action == "revoke":
+            return body
+        asset_id = payload.get("assetId")
+        if action == "acquire":
+            if not isinstance(asset_id, str) or asset_id not in self._asset_ids.get(connection_id, set()):
+                raise DriveClientError("unknown_asset_reference")
+            body["assetId"] = asset_id
+            return body
+        artifact_id = payload.get("retainedArtifactId") or payload.get("artifactId")
+        if action in {"inspect", "verifiedRead", "verify", "materialize", "release", "delete"}:
+            if not isinstance(artifact_id, str) or artifact_id not in self._artifact_ids.get(connection_id, set()):
+                raise DriveClientError("unknown_artifact_reference")
+            body["retainedArtifactId"] = artifact_id
             return body
         collection_ref = payload.get("collectionRef")
         if not isinstance(collection_ref, str) or collection_ref not in self._collection_ids.get(connection_id, set()):
@@ -365,6 +477,12 @@ class DriveClient:
         for key in ("nextPageToken", "changeCursor", "continuationToken"):
             if isinstance(result.get(key), str) and len(result[key]) <= 4096:
                 output[key] = result[key]
+        for key in ("receiptId", "operationRef", "retainedArtifactId", "artifactId", "graphInvocationRef", "hasMore", "incompleteSearch"):
+            if key in result and type(result[key]) in (str, bool):
+                output[key] = result[key]
+        for key in ("receipts", "artifacts", "items"):
+            if isinstance(result.get(key), list):
+                output[key] = [_safe_record(item) for item in result[key] if isinstance(item, Mapping)]
         if isinstance(result.get("connection"), Mapping):
             output["connection"] = _safe_record(result["connection"])
         return output
@@ -386,6 +504,8 @@ class DriveClient:
         # A refresh is an account/binding boundary even when a provider reuses
         # the same connection ID.  Never let collection refs cross that boundary.
         self._collection_ids = {}
+        self._asset_ids = {}
+        self._artifact_ids = {}
         self._last_collection_connection = None
 
     def _remember_collections(self, result: Mapping[str, Any]) -> None:
@@ -398,6 +518,30 @@ class DriveClient:
                 ref = item.get("collectionRef") or item.get("collectionId") or item.get("id")
                 if isinstance(ref, str):
                     refs.add(ref)
+
+    def _remember_assets(self, result: Mapping[str, Any], connection_id: str | None) -> None:
+        if not isinstance(connection_id, str):
+            return
+        refs = self._asset_ids.setdefault(connection_id, set())
+        for item in result.get("assets", []) if isinstance(result.get("assets"), list) else result.get("items", []):
+            if isinstance(item, Mapping):
+                ref = item.get("assetId")
+                if isinstance(ref, str):
+                    refs.add(ref)
+
+    def _remember_artifacts(self, result: Mapping[str, Any], connection_id: str | None) -> None:
+        if not isinstance(connection_id, str):
+            return
+        refs = self._artifact_ids.setdefault(connection_id, set())
+        for key in ("retainedArtifactId", "artifactId"):
+            value = result.get(key)
+            if isinstance(value, str):
+                refs.add(value)
+        for item in result.get("artifacts", []) if isinstance(result.get("artifacts"), list) else []:
+            if isinstance(item, Mapping):
+                value = item.get("retainedArtifactId") or item.get("artifactId")
+                if isinstance(value, str):
+                    refs.add(value)
 
     @staticmethod
     def _validate_authorization_url(value: Any) -> None:
@@ -422,7 +566,9 @@ def _safe_record(value: Mapping[str, Any]) -> dict[str, Any]:
     scalar_allowed = {
         "connectionId", "providerId", "signInMode", "credentialState", "state", "collectionRef", "collectionId",
         "assetId", "displayName", "name", "mimeType", "sizeBytes", "modifiedAtUtc", "kind", "isReady",
-        "isConfigured", "isSignInAvailable",
+        "isConfigured", "isSignInAvailable", "version", "sha256Checksum", "md5Checksum", "canDownload",
+        "isShortcut", "shortcutEligible", "driveType", "view", "retainedArtifactId", "artifactId",
+        "receiptId", "operationRef", "graphInvocationRef", "status", "isSuccess", "verified", "materialized",
     }
     output = {
         key: value[key]

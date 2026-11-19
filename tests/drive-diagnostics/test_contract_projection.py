@@ -58,3 +58,18 @@ class ContractProjectionTests(unittest.TestCase):
         self.run_git('-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '-qm', 'removed operation')
         with self.assertRaisesRegex(ValueError, 'Missing canonical operation'):
             projection.project(self.root)
+
+    def test_optional_drive_routes_are_projected_only_when_committed(self):
+        self.catalog.write_text(self.catalog.read_text() + '\nInternal("cloud.media.browse", "POST", EngineControlApiRoutes.Cloud.MediaBrowse),')
+        cloud = self.media.read_text().replace(
+            '        public const string CollectionsList',
+            '        public const string MediaBrowse = "/engine/v1/cloud/media:browse";\n        public const string CollectionsList')
+        self.media.write_text(cloud)
+        artifact = self.root / projection.OPTIONAL_SOURCE_FILES[0]
+        artifact.parent.mkdir(parents=True, exist_ok=True)
+        artifact.write_text('')
+        self.run_git('add', '.')
+        self.run_git('-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '-qm', 'optional browse operation')
+        result = projection.project(self.root)
+        self.assertEqual('/engine/v1/cloud/media:browse', result['operations']['browse']['path'])
+        self.assertEqual(4, len(result['sourceHashes']))

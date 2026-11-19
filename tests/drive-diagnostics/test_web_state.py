@@ -45,3 +45,11 @@ assert.equal(element('selection').textContent, 'Select one ISO or DICOM file.');
         app = Path(__file__).parents[2] / "src/drive-diagnostics/web/app.js"
         result = subprocess.run(["node", "-e", script, str(app)], capture_output=True, text=True)
         self.assertEqual(0, result.returncode, result.stderr)
+
+    def test_browse_cursor_is_invalidated_when_view_changes(self):
+        source = (Path(__file__).parents[2] / "src/drive-diagnostics/web/app.js").read_text(encoding="utf-8")
+        self.assertIn('byId("view").addEventListener("change", changeBrowseView)', source)
+        self.assertIn('byId("folder").replaceChildren(new Option("Browse to load folders", ""))', source)
+        self.assertIn('run("browse", {...browseContext, continuationToken})', source)
+        self.assertIn('clearFiles({resetBrowse: false, clearArtifact: true})', source)
+        self.assertIn('clearFiles({clearArtifact: true});', source)

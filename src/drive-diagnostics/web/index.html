@@ -47,21 +47,25 @@
 <span class="number">03</span>
 <h2>Browse files</h2>
 </div>
-<button id="folders">List available folders</button>
+<button id="folders" class="primary">Browse selected view</button>
 </div>
 <div class="views">
-<span>Legacy folder listing</span>
-<span aria-disabled="true">My Drive view · pending</span>
-<span aria-disabled="true">Shared with me · pending</span>
-<span aria-disabled="true">Shared drives · pending</span>
+<label for="view">Drive location</label>
+<select id="view">
+<option value="my-drive">My Drive</option>
+<option value="shared-with-me">Shared with me</option>
+<option value="shared-drives">Shared drives</option>
+<option value="shared-drive-folder">Selected shared-drive folder</option>
+</select>
 </div>
-<p class="hint">This route does not prove a complete inventory. Dedicated shared-location views and continuation are awaiting Engine integration.</p>
+<p class="hint">Browse is metadata-only. The view and continuation cursor stay bound to the selected Engine connection.</p>
 <label for="folder">Folder returned by Engine</label>
 <select id="folder">
 <option value="">Choose a connection first</option>
 </select>
-<button id="files">List files</button>
-<div id="pagination" class="notice" hidden>Engine returned a continuation cursor. This API has no continuation input; these results are incomplete.</div>
+<button id="files">List files in selected folder (legacy)</button>
+<button id="next-page" hidden>Load next page</button>
+<div id="pagination" class="notice" hidden>Engine returned a continuation cursor. Continue only within this connection and view.</div>
 <div class="table-scroll">
 <table>
 <thead>
@@ -83,13 +87,28 @@
 <div class="steps">
 <section>
 <span class="number">04</span>
-<h2>Acquire &amp; open</h2>
-<p id="selection">Select one ISO or DICOM file.</p>
-<button id="acquire">Check acquisition availability</button>
-<p class="notice">Verified retained-source acquisition, progress, cancellation and ISO/DICOM opening are not connected to this harness yet. The legacy import endpoint is not used as a substitute.</p>
+<h2>Retain &amp; inspect</h2>
+<p id="selection" role="status" aria-live="polite">Select one ISO or DICOM file.</p>
+<div class="buttons">
+<button id="acquire">Acquire selected file</button>
+<button id="inspect">Inspect retained artifact</button>
+<button id="verify">Verify retained artifact</button>
+<button id="materialize">Materialize verified artifact</button>
+<button id="release">Release retained artifact</button>
+</div>
+<p class="notice">Acquisition is always explicit: browsing never downloads or opens patient content. This harness shows metadata and Engine receipts only; it does not expose local paths or file bytes.</p>
 </section>
 <section>
 <span class="number">05</span>
+<h2>Connection controls</h2>
+<p>Provider revocation is a separate explicit action and is never inferred from sign-out or a refresh.</p>
+<div class="buttons">
+<button id="revoke">Revoke selected connection</button>
+<button id="graph">Probe Drive graph/node capability</button>
+</div>
+</section>
+<section>
+<span class="number">06</span>
 <h2>Result</h2>
 <p id="status" role="status" aria-live="polite">Ready to check Engine.</p>
 <pre id="result">No requests made.</pre>
