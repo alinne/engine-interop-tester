@@ -53,3 +53,23 @@ assert.equal(element('selection').textContent, 'Select one ISO or DICOM file.');
         self.assertIn('run("browse", {...browseContext, continuationToken})', source)
         self.assertIn('clearFiles({resetBrowse: false, clearArtifact: true})', source)
         self.assertIn('clearFiles({clearArtifact: true});', source)
+
+    def test_retained_actions_support_reload_reference_and_explicit_delete(self):
+        source = (Path(__file__).parents[2] / "src/drive-diagnostics/web/app.js").read_text(encoding="utf-8")
+        self.assertIn('if (retainedArtifact) return {retainedArtifactId: retainedArtifact};', source)
+        self.assertIn('return {artifactId: explicit};', source)
+        self.assertIn('runRetained("delete", {purpose, idempotencyKey});', source)
+        self.assertIn('Permanently delete this retained artifact? This cannot be undone.', source)
+        page = (Path(__file__).parents[2] / "src/drive-diagnostics/web/index.html").read_text(encoding="utf-8")
+        self.assertIn('id="delete-purpose"', page)
+        self.assertIn('id="delete-idempotency"', page)
+        self.assertIn('id="delete"', page)
+        self.assertIn("Engine checks access against the authenticated owner scope.", page)
+        self.assertNotIn("selected connection and owner scope", page)
+
+    def test_editing_artifact_reference_clears_remembered_binding(self):
+        source = (Path(__file__).parents[2] / "src/drive-diagnostics/web/app.js").read_text(encoding="utf-8")
+        self.assertIn('byId("artifact-id").addEventListener("input"', source)
+        self.assertIn('retainedArtifact = null;', source)
+        self.assertIn('retainedArtifactDetails = null;', source)
+        self.assertIn('if (retainedArtifact && typed !== retainedArtifact)', source)

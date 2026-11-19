@@ -27,6 +27,7 @@ OPTIONAL_CONTRACTS = {
         "revoke": {"method": "POST", "path": "/engine/v1/cloud/connections/{connectionId}/revoke"},
         "inspect": {"method": "GET", "path": "/engine/v1/media/artifacts/{artifactId}"},
         "verify": {"method": "POST", "path": "/engine/v1/media/artifacts/{artifactId}:verify"},
+        "delete": {"method": "POST", "path": "/engine/v1/media/artifacts/{artifactId}:delete"},
         "graphPrepareBrowse": {"method": "POST", "path": "/engine/v1/external-media/tenants/{tenantId}/prepare/browse"},
         "graphPrepareAcquire": {"method": "POST", "path": "/engine/v1/external-media/tenants/{tenantId}/prepare/acquire-retained"},
         "graphSubmitBrowse": {"method": "POST", "path": "/engine/v1/external-media/tenants/{tenantId}/scopes/{scopeId}/invocations/{invocationRef}/browse"},
@@ -149,6 +150,29 @@ class OptionalDriveCapabilityTests(unittest.TestCase):
             })
         self.assertEqual("/engine/v1/media/artifacts/artifact-1:verify", request.call_args.args[1])
         self.assertEqual({"purpose": "diagnostic"}, request.call_args.kwargs["body"])
+
+    def test_explicit_artifact_id_supports_post_reload_access_without_in_process_binding(self):
+        with mock.patch.object(self.client, "_request", return_value={"isSuccess": True}) as request:
+            result = self.client.execute("delete", {
+                "connectionId": "conn-1", "artifactId": "artifact-reloaded",
+                "purpose": "vault-diagnostics.cleanup", "idempotencyKey": "delete-1",
+            })
+        self.assertTrue(result["isSuccess"])
+        self.assertEqual("/engine/v1/media/artifacts/artifact-reloaded:delete", request.call_args.args[1])
+        self.assertEqual(
+            {"purpose": "vault-diagnostics.cleanup", "idempotencyKey": "delete-1"},
+            request.call_args.kwargs["body"],
+        )
+
+    def test_explicit_artifact_id_rejects_path_or_control_characters(self):
+        with mock.patch.object(self.client, "_request") as request:
+            for artifact_id in ("../secret", "artifact/child", "artifact\nsecret", ""):
+                with self.subTest(artifact_id=artifact_id):
+                    with self.assertRaisesRegex(DriveClientError, "artifact_id_invalid"):
+                        self.client.execute("inspect", {
+                            "connectionId": "conn-1", "artifactId": artifact_id,
+                        })
+        request.assert_not_called()
 
     def test_browse_rejects_shared_folder_without_location_ref(self):
         with self.assertRaisesRegex(DriveClientError, "browse_location_reference_required"):
@@ -309,6 +333,43 @@ class OptionalDriveCapabilityTests(unittest.TestCase):
         self.assertNotIn("rawRef", json.dumps(result))
         self.assertNotIn("providerPath", json.dumps(result))
         self.assertIn("selection-graph", self.client._selection_refs["conn-1"])
+
+    def test_graph_submit_http_failure_preserves_sanitized_reason_and_requires_reconciliation(self):
+        invocation = "h" * 64
+        prepare = {"isSuccess": True, "invocationRef": invocation, "scopeId": "scope-http",
+                   "rootJobId": "job-http", "graphHash": "c" * 64, "expiresUtc": "2026-11-19T20:00:00Z"}
+        failure = {
+            "isSuccess": False,
+            "reasonCodes": ["engine_http_error"],
+            "httpStatus": 409,
+            "retainedArtifactId": "must-not-leak",
+        }
+        with mock.patch.object(self.client, "_request", side_effect=[prepare, failure]):
+            self.client.execute("graphPrepareBrowse", {"connectionId": "conn-1", "locationKind": "my_drive_root"})
+            result = self.client.execute("graphSubmitBrowse", {"graphKind": "browse"})
+        self.assertFalse(result["isSuccess"])
+        self.assertEqual(["engine_http_error"], result["reasonCodes"])
+        self.assertEqual(409, result["httpStatus"])
+        self.assertNotIn("retainedArtifactId", result)
+        self.assertFalse(self.client._graph_bindings["browse"]["statusTerminal"])
+        self.assertTrue(self.client._graph_bindings["browse"]["submitted"])
+
+    def test_graph_submit_success_without_matching_invocation_still_fails_closed(self):
+        invocation = "i" * 64
+        self.client._graph_bindings["browse"] = {
+            "connectionId": "conn-1", "tenantId": "tenant", "scopeId": "scope-success",
+            "invocationRef": invocation, "requestBody": {"connectionId": "conn-1"},
+            "submitted": False, "statusTerminal": False,
+        }
+        mismatched = {
+            "isSuccess": True, "invocationRef": "j" * 64, "scopeId": "scope-success",
+            "status": "Completed", "output": {"artifactId": "wrong-artifact"},
+        }
+        with mock.patch.object(self.client, "_request", return_value=mismatched):
+            result = self.client.execute("graphSubmitBrowse", {"graphKind": "browse"})
+        self.assertFalse(result["isSuccess"])
+        self.assertEqual(["graph_binding_mismatch"], result["reasonCodes"])
+        self.assertNotIn("retainedArtifactId", result)
 
     def test_graph_acquire_output_remembers_only_matching_bound_artifact(self):
         invocation = "1" * 64

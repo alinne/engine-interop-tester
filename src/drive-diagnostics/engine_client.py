@@ -654,9 +654,18 @@ class DriveClient:
                 "maximumDurationSeconds": maximum_duration,
             }
             return body
-        artifact_id = payload.get("retainedArtifactId") or payload.get("artifactId")
+        retained_artifact_id = payload.get("retainedArtifactId")
+        explicit_artifact_id = payload.get("artifactId") if retained_artifact_id is None else None
+        artifact_id = retained_artifact_id or explicit_artifact_id
         if action in {"inspect", "verifiedRead", "verify", "materialize", "release", "delete"}:
-            if not isinstance(artifact_id, str) or artifact_id not in self._artifact_ids.get(connection_id, set()):
+            if not isinstance(artifact_id, str) or not _valid_opaque_artifact_id(artifact_id):
+                raise DriveClientError("artifact_id_invalid")
+            # A retainedArtifactId is an in-process binding and must have been
+            # returned for this connection.  A separately supplied artifactId
+            # is the explicit reload path: the Engine remains authoritative
+            # for its owner-scope authorization, while this client still
+            # rejects path/control characters before URL construction.
+            if retained_artifact_id is not None and artifact_id not in self._artifact_ids.get(connection_id, set()):
                 raise DriveClientError("unknown_artifact_reference")
             body = {"__routeArtifactId": artifact_id}
             if action in {"verify", "materialize", "release", "delete"}:
@@ -929,6 +938,22 @@ class DriveClient:
             if action in {"graphSubmitBrowse", "graphSubmitAcquire", "graphStatus"}:
                 return self._graph_binding_failure(output)
             return output
+        # A transport-level Engine failure has no invocation binding to echo.
+        # Preserve its bounded reason/status instead of misdiagnosing the
+        # failed request as a provider/tenant mismatch.  The ticket remains
+        # unverified so the caller still has to reconcile before retrying.
+        http_status = raw.get("httpStatus")
+        if (
+            action in {"graphSubmitBrowse", "graphSubmitAcquire", "graphStatus"}
+            and output.get("isSuccess") is not True
+            and type(http_status) is int
+            and 400 <= http_status <= 599
+            and not invocation
+        ):
+            for key in ("retainedArtifact", "retainedArtifactId", "retainedArtifacts"):
+                output.pop(key, None)
+            output["_graphBindingVerified"] = False
+            return output
         if action in {"graphSubmitBrowse", "graphSubmitAcquire", "graphStatus"} and (
                 not isinstance(invocation, str) or invocation != binding.get("invocationRef")):
             return self._graph_binding_failure(output)
@@ -1159,6 +1184,11 @@ def _reason_codes(value: Any) -> list[str]:
     if isinstance(value, str) and value:
         return [value[:128]]
     return []
+
+
+def _valid_opaque_artifact_id(value: str) -> bool:
+    """Keep an explicitly re-entered artifact ref path-safe and bounded."""
+    return bool(re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,159}", value))
 
 
 def _validated_publication(value: Mapping[str, Any]) -> dict[str, Any]:

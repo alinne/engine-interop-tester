@@ -90,8 +90,9 @@
 <h2>Retain &amp; inspect</h2>
 <p id="selection" role="status" aria-live="polite">Select one ISO or DICOM file.</p>
 <div class="form-grid">
-<label for="artifact-id">Opaque artifact ID (required for this attempt)</label>
+<label for="artifact-id">Opaque retained artifact ID (acquire or reload)</label>
 <input id="artifact-id" maxlength="160" placeholder="vault-drive-study-001">
+<p class="hint">For a post-reload inspection, enter the retained artifact ID returned by Engine. Engine checks access against the authenticated owner scope.</p>
 <label for="maximum-bytes">Maximum bytes</label>
 <input id="maximum-bytes" inputmode="numeric" value="1073741824">
 <label for="maximum-duration">Maximum duration (seconds)</label>
@@ -129,7 +130,13 @@
 <input id="relative-output-path" placeholder="diagnostics/study.dcm" maxlength="4096">
 <label for="release-idempotency">Release idempotency key</label>
 <input id="release-idempotency" placeholder="drive-diagnostics-release-001" maxlength="256">
-<button id="release">Release retained artifact</button>
+<button id="release">Tombstone retained artifact</button>
+<label for="delete-purpose">Deletion purpose</label>
+<input id="delete-purpose" value="vault-diagnostics.cleanup" maxlength="128">
+<label for="delete-idempotency">Deletion idempotency key</label>
+<input id="delete-idempotency" placeholder="drive-diagnostics-delete-001" maxlength="256">
+<button id="delete">Permanently delete retained artifact</button>
+<p class="notice">Deletion is an explicit, irreversible Engine-retained-artifact action. It does not delete the Google Drive source.</p>
 </div>
 <p id="retained-artifact-status" class="artifact-status" role="status" aria-live="polite">No retained artifact is bound to this connection yet.</p>
 <p class="notice">Acquisition is always explicit: browsing never downloads or opens patient content. Verified read is explicit and discards bytes after a bounded diagnostic transfer; it never displays or saves content. Materialization remains Engine-custodied.</p>
@@ -167,7 +174,7 @@
 <p class="hint">Sanitized response only. Nothing is saved by this app. Synthetic tests and live Google qualification are separate proof.</p>
 </section>
 </div>
-<footer>This diagnostic does not upload, delete, publish or modify Google Drive files. Engine authentication and policy remain authoritative.</footer>
+<footer>This diagnostic does not upload, publish or modify Google Drive files. Retained-artifact deletion is explicit and Engine-authorized; Engine authentication and policy remain authoritative.</footer>
 </main>
 </body>
 </html>

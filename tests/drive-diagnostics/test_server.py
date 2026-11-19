@@ -218,10 +218,29 @@ class ServerTests(unittest.TestCase):
                 error.exception.close()
         self.assertEqual([], self.client.calls)
 
+    def test_delete_requires_explicit_artifact_reference_and_metadata(self):
+        csrf = self.bootstrap()
+        for payload, reason in (
+            ({}, "retained_artifact_id_required"),
+            ({"artifactId": "artifact-1"}, "delete_purpose_required"),
+            ({"artifactId": "artifact-1", "purpose": "cleanup"}, "delete_idempotency_key_required"),
+            ({"artifactId": "bad/id", "purpose": "cleanup", "idempotencyKey": "delete-1"}, "retained_artifact_id_required"),
+        ):
+            with self.subTest(reason=reason):
+                with self.assertRaises(HTTPError) as error:
+                    self.post({"action": "delete", "payload": payload}, csrf=csrf)
+                self.assertEqual(400, error.exception.code)
+                self.assertIn(reason, error.exception.read().decode())
+                error.exception.close()
+        payload = {"artifactId": "artifact-1", "purpose": "cleanup", "idempotencyKey": "delete-1"}
+        with self.post({"action": "delete", "payload": payload}, csrf=csrf) as response:
+            self.assertTrue(json.load(response)["isSuccess"])
+        self.assertEqual([("delete", payload)], self.client.calls)
+
     def test_unknown_action_is_rejected(self):
         csrf = self.bootstrap()
         with self.assertRaises(HTTPError) as error:
-            self.post({"action": "delete"}, csrf=csrf)
+            self.post({"action": "not-an-action"}, csrf=csrf)
         self.assertEqual(400, error.exception.code)
         error.exception.close()
         self.assertEqual([], self.client.calls)

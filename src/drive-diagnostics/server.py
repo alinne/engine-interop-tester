@@ -3,6 +3,7 @@ from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, HTTPServer
 import json
 from pathlib import Path
+import re
 import secrets
 from urllib.parse import urlsplit, parse_qs
 
@@ -10,7 +11,7 @@ WEB = Path(__file__).with_name("web")
 ACTIONS = frozenset((
     "readiness", "start", "status", "connections", "collections", "assets",
     "browse", "acquire", "inspect", "verifiedRead", "verify", "materialize",
-    "release", "revoke", "graph",
+    "release", "delete", "revoke", "graph",
     "graphPrepareBrowse", "graphPrepareAcquire", "graphSubmitBrowse", "graphSubmitAcquire",
     "graphStatus", "graphCancel",
 ))
@@ -28,6 +29,7 @@ _PUBLICATION_KEYS = frozenset((
     "consentRequiredPurposes", "retentionPolicyId", "retentionClass", "idempotencyKey",
     "sessionId", "correlationId", "traceparent",
 ))
+_OPAQUE_ARTIFACT_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,159}\Z")
 
 
 def _valid_payload(payload):
@@ -183,6 +185,15 @@ def make_server(client, port=8765):
                 action = request["action"]
                 if action == "acquire" and not (payload.get("selectionRef") or payload.get("opaqueSelectionRef") or payload.get("assetId")):
                     return self.reject(400, "asset_selection_required")
+                if action in {"inspect", "verifiedRead", "verify", "materialize", "release", "delete"}:
+                    references = [payload.get(key) for key in ("retainedArtifactId", "artifactId") if key in payload]
+                    if len(references) != 1 or not isinstance(references[0], str) or not _OPAQUE_ARTIFACT_ID.fullmatch(references[0]):
+                        return self.reject(400, "retained_artifact_id_required")
+                if action == "delete":
+                    if not isinstance(payload.get("purpose"), str) or not payload["purpose"]:
+                        return self.reject(400, "delete_purpose_required")
+                    if not isinstance(payload.get("idempotencyKey"), str) or not payload["idempotencyKey"]:
+                        return self.reject(400, "delete_idempotency_key_required")
                 if action == "browse":
                     location_kind = payload.get("locationKind")
                     if location_kind is not None and location_kind not in {

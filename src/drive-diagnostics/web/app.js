@@ -25,6 +25,7 @@ function clearFiles({resetBrowse = true, clearArtifact = false} = {}) {
   if (clearArtifact) {
     retainedArtifact = null;
     retainedArtifactDetails = null;
+    byId("artifact-id").value = "";
     renderRetainedArtifact(null);
   }
   if (resetBrowse) graphPreparedKind = null;
@@ -45,6 +46,7 @@ function renderRetainedArtifact(record) {
   }
   retainedArtifactDetails = record;
   retainedArtifact = record.artifactId;
+  byId("artifact-id").value = record.artifactId;
   const details = ["Bound artifact: " + record.artifactId];
   if (typeof record.contentHash === "string") details.push("hash " + record.contentHash);
   if (Number.isInteger(record.byteSize)) details.push(record.byteSize + " bytes");
@@ -196,8 +198,32 @@ async function run(action, payload = {}) {
     buttons.forEach(button => button.disabled = false);
   }
 }
+function retainedArtifactPayload() {
+  if (retainedArtifact) return {retainedArtifactId: retainedArtifact};
+  const explicit = byId("artifact-id").value.trim();
+  if (explicit) return {artifactId: explicit};
+  return null;
+}
+function runRetained(action, extra = {}) {
+  const reference = retainedArtifactPayload();
+  if (!reference) {
+    return render(action, {isSuccess: false, reasonCodes: ["retained_artifact_id_required"]});
+  }
+  return run(action, {connectionId: connectionId(), ...reference, ...extra});
+}
 document.querySelectorAll("[data-action]").forEach(button => button.addEventListener("click", () => run(button.dataset.action)));
 byId("connection").addEventListener("change", () => resetFolders({clearResult: true}));
+byId("artifact-id").addEventListener("input", () => {
+  const typed = byId("artifact-id").value.trim();
+  // An edited field is an explicit post-reload reference. Drop the in-memory
+  // binding and details so a delete/access action cannot silently target the
+  // artifact remembered before the user changed the field.
+  if (retainedArtifact && typed !== retainedArtifact) {
+    retainedArtifact = null;
+    retainedArtifactDetails = null;
+    renderRetainedArtifact(null);
+  }
+});
 byId("view").addEventListener("change", changeBrowseView);
 byId("folder").addEventListener("change", invalidateBrowseContext);
 byId("files").addEventListener("click", () => run("assets", {connectionId: connectionId(), collectionRef: byId("folder").value}));
@@ -224,12 +250,21 @@ byId("acquire").addEventListener("click", () => run("acquire", {
   maximumDurationSeconds: byId("maximum-duration").value.trim(),
   publication: publicationPayload()
 }));
-byId("inspect").addEventListener("click", () => run("inspect", {connectionId: connectionId(), retainedArtifactId: retainedArtifact || ""}));
-byId("verify").addEventListener("click", () => run("verify", {connectionId: connectionId(), retainedArtifactId: retainedArtifact || ""}));
-byId("verified-read").addEventListener("click", () => run("verifiedRead", {connectionId: connectionId(), retainedArtifactId: retainedArtifact || "", purpose: byId("access-purpose").value.trim()}));
-byId("materialize").addEventListener("click", () => run("materialize", {connectionId: connectionId(), retainedArtifactId: retainedArtifact || "", purpose: byId("access-purpose").value.trim(), relativeOutputPath: byId("relative-output-path").value.trim()}));
+byId("inspect").addEventListener("click", () => runRetained("inspect"));
+byId("verify").addEventListener("click", () => runRetained("verify", {purpose: byId("access-purpose").value.trim()}));
+byId("verified-read").addEventListener("click", () => runRetained("verifiedRead", {purpose: byId("access-purpose").value.trim()}));
+byId("materialize").addEventListener("click", () => runRetained("materialize", {purpose: byId("access-purpose").value.trim(), relativeOutputPath: byId("relative-output-path").value.trim()}));
 byId("release").addEventListener("click", () => {
-  if (retainedArtifact && window.confirm("Tombstone this retained artifact?")) run("release", {connectionId: connectionId(), retainedArtifactId: retainedArtifact, purpose: byId("access-purpose").value.trim(), idempotencyKey: byId("release-idempotency").value.trim()});
+  if (window.confirm("Tombstone this retained artifact?")) runRetained("release", {purpose: byId("access-purpose").value.trim(), idempotencyKey: byId("release-idempotency").value.trim()});
+});
+byId("delete").addEventListener("click", () => {
+  const purpose = byId("delete-purpose").value.trim();
+  const idempotencyKey = byId("delete-idempotency").value.trim();
+  if (!purpose) return render("delete", {isSuccess: false, reasonCodes: ["delete_purpose_required"]});
+  if (!idempotencyKey) return render("delete", {isSuccess: false, reasonCodes: ["delete_idempotency_key_required"]});
+  if (window.confirm("Permanently delete this retained artifact? This cannot be undone.")) {
+    runRetained("delete", {purpose, idempotencyKey});
+  }
 });
 byId("revoke").addEventListener("click", () => {
   if (connectionId() && window.confirm("Revoke this selected Google Drive connection?")) run("revoke", {connectionId: connectionId()});
