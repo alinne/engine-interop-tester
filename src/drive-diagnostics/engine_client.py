@@ -54,7 +54,44 @@ _ACTION_ALIASES = {
     "release": ("release", "tombstone"),
 }
 _LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1"}
-_SAFE_STATUS_KEYS = {"providerId", "state", "status", "isSuccess", "reasonCodes", "expiresAtUtc"}
+_SAFE_STATUS_KEYS = {"providerId", "state", "status", "isSuccess", "reasonCodes", "expiresAtUtc", "httpStatus"}
+_PUBLIC_GRAPH_ADMISSION_REASON_CODES = frozenset((
+    "external_media_graph_execute_right_missing",
+    "external_media_trust_unavailable",
+    "external_media_clock_unavailable",
+    "external_media_implementation_unavailable",
+    "graph_execution_ticket_invalid_request",
+    "graph_execution_ticket_authorization_denied",
+    "graph_execution_ticket_evidence_author_unavailable",
+    "graph_execution_ticket_plan_not_admitted",
+))
+
+
+def _project_http_error(data: bytes, status: int) -> dict[str, Any]:
+    """Expose only bounded transport evidence and fixed public graph errors.
+
+    Engine problem details can contain internal messages, identities, and
+    extensions.  Only the numeric response status and the exact admission
+    reason codes published by the external-media route may cross into this
+    diagnostic UI.  The response body can never turn an HTTP failure into a
+    success.
+    """
+    output: dict[str, Any] = {
+        "isSuccess": False,
+        "reasonCodes": ["engine_http_error"],
+    }
+    if type(status) is int and 400 <= status <= 599:
+        output["httpStatus"] = status
+    try:
+        parsed = json.loads(data.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return output
+    if not isinstance(parsed, dict):
+        return output
+    reason_code = parsed.get("reasonCode")
+    if type(reason_code) is str and reason_code in _PUBLIC_GRAPH_ADMISSION_REASON_CODES:
+        output["reasonCodes"] = [reason_code]
+    return output
 
 
 class DriveClientError(ValueError):
@@ -683,7 +720,7 @@ class DriveClient:
             if len(data) > _MAX_RESPONSE_BYTES:
                 return {"isSuccess": False, "reasonCodes": ["engine_response_too_large"]}
             if response.status >= 400:
-                return {"isSuccess": False, "reasonCodes": ["engine_http_error"], "httpStatus": response.status}
+                return _project_http_error(data, response.status)
             if callback_text:
                 # The published callback returns fixed plain text. Never relay
                 # provider/Engine response bodies into the browser or logs.

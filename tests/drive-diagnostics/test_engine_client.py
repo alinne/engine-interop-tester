@@ -41,6 +41,8 @@ class EngineHandler(BaseHTTPRequestHandler):
     calls: list[tuple[str, str, dict]] = []
     consumer_ids: list[str | None] = []
     mode = "happy"
+    http_error_status = 500
+    http_error_payload = {"secret": "must-not-leak"}
     connections_payload = None
     collections_payload = None
     assets_payload = None
@@ -68,7 +70,7 @@ class EngineHandler(BaseHTTPRequestHandler):
             self.end_headers()
             return
         if EngineHandler.mode == "http-error":
-            self._reply(500, {"secret": "must-not-leak"})
+            self._reply(EngineHandler.http_error_status, EngineHandler.http_error_payload)
             return
         if EngineHandler.mode == "semantic-fail":
             self._reply(200, {"isSuccess": False, "reasonCodes": ["permission_denied"], "secret": "must-not-leak"})
@@ -175,6 +177,8 @@ class DriveClientTests(unittest.TestCase):
         EngineHandler.calls = []
         EngineHandler.consumer_ids = []
         EngineHandler.mode = "happy"
+        EngineHandler.http_error_status = 500
+        EngineHandler.http_error_payload = {"secret": "must-not-leak"}
         EngineHandler.connections_payload = None
         EngineHandler.collections_payload = None
         EngineHandler.assets_payload = None
@@ -459,10 +463,53 @@ class DriveClientTests(unittest.TestCase):
         EngineHandler.mode = "http-error"
         failed = self.client().execute("readiness")
         self.assertEqual(failed["reasonCodes"], ["engine_http_error"])
+        self.assertEqual(500, failed["httpStatus"])
+        self.assertFalse(failed["isSuccess"])
         self.assertNotIn("must-not-leak", json.dumps(failed))
         EngineHandler.mode = "large"
         limited = self.client().execute("readiness")
         self.assertEqual(limited["reasonCodes"], ["engine_response_too_large"])
+
+    def test_http_error_projects_only_allowlisted_admission_reason_codes(self):
+        for reason_code in sorted(client_module._PUBLIC_GRAPH_ADMISSION_REASON_CODES):
+            with self.subTest(reason_code=reason_code):
+                result = client_module._project_http_error(
+                    json.dumps({
+                        "reasonCode": reason_code,
+                        "message": "secret detail",
+                        "providerId": "secret-provider",
+                        "extensions": {"token": "secret-token"},
+                    }).encode("utf-8"),
+                    409,
+                )
+                self.assertFalse(result["isSuccess"])
+                self.assertEqual(409, result["httpStatus"])
+                self.assertEqual([reason_code], result["reasonCodes"])
+                self.assertNotIn("secret", json.dumps(result))
+                self.assertNotIn("providerId", result)
+
+    def test_http_error_rejects_unknown_nested_and_body_status_fields(self):
+        EngineHandler.mode = "http-error"
+        EngineHandler.http_error_status = 409
+        EngineHandler.http_error_payload = {
+            "reasonCode": {"value": "external_media_trust_unavailable"},
+            "status": 200,
+            "extensions": {"reasonCode": "external_media_trust_unavailable"},
+            "message": "secret detail",
+            "providerId": "secret-provider",
+        }
+        result = self.client().execute("readiness")
+        self.assertFalse(result["isSuccess"])
+        self.assertEqual(409, result["httpStatus"])
+        self.assertEqual(["engine_http_error"], result["reasonCodes"])
+        self.assertNotIn("secret", json.dumps(result))
+        self.assertNotIn("providerId", result)
+
+    def test_http_error_malformed_body_stays_generic(self):
+        result = client_module._project_http_error(b"{\"reasonCode\":", 503)
+        self.assertFalse(result["isSuccess"])
+        self.assertEqual(503, result["httpStatus"])
+        self.assertEqual(["engine_http_error"], result["reasonCodes"])
 
     def test_no_redirect_and_unavailable_acquisition(self):
         contracts = {"operations": {"readiness": {"method": "GET", "path": "/redirect"}}}
