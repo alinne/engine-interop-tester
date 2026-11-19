@@ -569,6 +569,47 @@ class OptionalDriveCapabilityTests(unittest.TestCase):
         with self.assertRaisesRegex(DriveClientError, "browse_location_reference_required"):
             self.client.execute("browse", {"connectionId": "conn-1", "locationKind": "folder"})
 
+    def test_http_error_projects_exact_cloud_and_retained_transport_codes(self):
+        cases = (
+            ("cloud_external_media_access_denied", "errorCode"),
+            ("cloud_external_media_operation_failed", "errorCode"),
+            ("media_artifact_caller_unavailable", "reasonCode"),
+        )
+        for reason_code, field in cases:
+            with self.subTest(reason_code=reason_code, field=field):
+                result = module._project_http_error(
+                    json.dumps({
+                        field: reason_code,
+                        "message": "secret detail",
+                        "type": "https://internal.example/problem",
+                        "providerId": "secret-provider",
+                        "extensions": {"token": "secret-token"},
+                    }).encode("utf-8"),
+                    502,
+                )
+                self.assertFalse(result["isSuccess"])
+                self.assertEqual(502, result["httpStatus"])
+                self.assertEqual([reason_code], result["reasonCodes"])
+                self.assertNotIn("secret", json.dumps(result))
+                self.assertNotIn("providerId", result)
+
+    def test_http_error_rejects_nonexact_transport_codes_and_nested_injections(self):
+        for payload in (
+            {"errorCode": "cloud_external_media_operation_failed.extra"},
+            {"errorCode": "cloud_external_media_access_denied-secret"},
+            {"errorCode": {"value": "cloud_external_media_operation_failed"}},
+            {"reasonCode": "media_artifact_caller_unavailable", "errorCode": "secret-provider-code"},
+            {"extensions": {"errorCode": "cloud_external_media_operation_failed"}},
+        ):
+            payload.update({"message": "secret detail", "providerId": "secret-provider"})
+            with self.subTest(payload=payload):
+                result = module._project_http_error(json.dumps(payload).encode("utf-8"), 403)
+                self.assertFalse(result["isSuccess"])
+                self.assertEqual(403, result["httpStatus"])
+                self.assertEqual(["engine_http_error"], result["reasonCodes"])
+                self.assertNotIn("secret", json.dumps(result))
+                self.assertNotIn("providerId", result)
+
     def test_graph_prepare_submit_status_requires_reconciliation_before_new_attempt(self):
         prepare = {
             "isSuccess": True, "invocationRef": "a" * 64, "scopeId": "scope-1",

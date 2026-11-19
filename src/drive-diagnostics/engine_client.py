@@ -71,6 +71,14 @@ _PUBLIC_GRAPH_ADMISSION_REASON_CODES = frozenset((
     "external_media_terminal_replay_unavailable",
     "external_media_reconciliation_required",
 ))
+_PUBLIC_HTTP_TRANSPORT_REASON_CODES = frozenset((
+    # These are the fixed codes emitted by the Engine cloud-operation and
+    # retained-artifact ProblemDetails routes.  Keep this list exact: the
+    # transport body may contain private details and is never projected.
+    "cloud_external_media_access_denied",
+    "cloud_external_media_operation_failed",
+    "media_artifact_caller_unavailable",
+))
 
 
 def _project_http_error(data: bytes, status: int) -> dict[str, Any]:
@@ -94,8 +102,20 @@ def _project_http_error(data: bytes, status: int) -> dict[str, Any]:
         return output
     if not isinstance(parsed, dict):
         return output
-    reason_code = parsed.get("reasonCode")
-    if type(reason_code) is str and reason_code in _PUBLIC_GRAPH_ADMISSION_REASON_CODES:
+    # Graph admission problems use reasonCode; cloud route ProblemDetails use
+    # errorCode.  Do not fall back between fields when a malformed or
+    # conflicting field is present, so an injected alternate code cannot be
+    # promoted.
+    if "reasonCode" in parsed and "errorCode" in parsed:
+        reason_code = None
+    elif "reasonCode" in parsed:
+        reason_code = parsed["reasonCode"]
+    else:
+        reason_code = parsed.get("errorCode")
+    if type(reason_code) is str and (
+        reason_code in _PUBLIC_GRAPH_ADMISSION_REASON_CODES
+        or reason_code in _PUBLIC_HTTP_TRANSPORT_REASON_CODES
+    ):
         output["reasonCodes"] = [reason_code]
         if reason_code == "external_media_reconciliation_required":
             # This route's recovery contract is fixed: callers must reconcile
