@@ -69,6 +69,20 @@ implements ISO/DICOM parsing; those remain consumer application responsibilities
 
 ## Contract authority and proof
 
+Before acquisition, an Engine administrator must register a retention policy in the selected tenant
+through Engine's authenticated privacy retention-policy API. Enter its exact policy ID and matching
+retention class in the form; a policy name in this UI does not create a policy. Publication requires
+the canonical `storage` purpose as well as the purpose used for subsequent inspection and reads.
+The form includes both purposes by default and leaves the policy ID empty to avoid implying that
+an unprovisioned policy exists. Keep diagnostic retention finite and separate from production policy.
+
+For download proof, record the successful acquisition's byte size and SHA-256, then click
+**Verified read (discard bytes)**. Its complete streamed byte count and SHA-256 must match the
+publication. This proves the bytes crossed both Drive-to-Engine and Engine-to-consumer boundaries
+without displaying content or saving a second copy. HTTP success alone is insufficient. A failed
+graph must be reconciled before preparing a new attempt; use a fresh publication idempotency key
+when changing publication metadata.
+
 `src/drive-diagnostics/contracts.json` is a generated consumer projection of the seven baseline Engine
 route declarations plus any optional browse/retained-artifact declarations present in the selected
 committed source. It retains the selected source commit and SHA-256 for every projected source file.
@@ -196,3 +210,19 @@ after a page reload and an Engine restart without resubmission. A stale browser 
 until refreshed. An expired connection correctly reported refresh and graph failure. This is live
 metadata-only proof under a local synthetic admission profile; no Drive content was downloaded or
 modified. Representative non-patient ISO/DICOM acquisition and production qualification remain open.
+
+## November 19 live download proof
+
+The alternate approved Google account successfully acquired an accessible shared ISO into Engine
+retained storage: **82,982,912 bytes**, with SHA-256
+`ca9dce01d3df49dea8ef143fb56290f9833571e0549853d7f4c3868fe3e34160`.
+The diagnostic then streamed all **82,982,912 bytes** back through Engine's verified-read route,
+computed the same SHA-256, and discarded the transferred bytes. No content was rendered and the
+Google source was not modified. Selected proof is retained in the owning External Connections
+evidence collection; credentials and runtime databases remain in the private runtime store.
+
+This was a local diagnostic using the candidate Engine build and synthetic admission profile.
+It proves live retained download and complete consumer read; it does not establish production
+qualification, ISO/DICOM parsing, or Vault integration. The run also exposed missing local retention
+policy configuration, a missing publication `storage` purpose, and consumer graph/verification
+projection issues, which must remain distinct from provider-download failures.

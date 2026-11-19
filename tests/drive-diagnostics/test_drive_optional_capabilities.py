@@ -399,6 +399,161 @@ class OptionalDriveCapabilityTests(unittest.TestCase):
         self.assertEqual("/engine/v1/media/artifacts/artifact-1:verify", request.call_args.args[1])
         self.assertEqual({"purpose": "diagnostic"}, request.call_args.kwargs["body"])
 
+    def test_verify_projects_published_consumer_result_instead_of_optimistic_success(self):
+        self.client._artifact_ids = {"conn-1": {"artifact-1"}}
+        response = {
+            "httpStatus": 200,
+            "artifactId": "artifact-1",
+            "exists": True,
+            "verified": True,
+            "reasonCode": "media_artifact_integrity_verified",
+            "expectedSha256": "A" * 64,
+            "actualSha256": "a" * 64,
+        }
+        with mock.patch.object(self.client, "_request", return_value=response):
+            result = self.client.execute("verify", {
+                "connectionId": "conn-1", "retainedArtifactId": "artifact-1", "purpose": "diagnostic",
+            })
+        self.assertTrue(result["isSuccess"])
+        self.assertTrue(result["exists"])
+        self.assertTrue(result["verified"])
+        self.assertEqual("media_artifact_integrity_verified", result["reasonCode"])
+        self.assertEqual("artifact-1", result["artifactId"])
+        self.assertEqual("a" * 64, result["expectedSha256"])
+        self.assertEqual("a" * 64, result["actualSha256"])
+
+    def test_verify_rejects_a_response_for_a_different_requested_artifact(self):
+        self.client._artifact_ids = {"conn-1": {"artifact-1"}}
+        with mock.patch.object(self.client, "_request", return_value={
+            "httpStatus": 200,
+            "artifactId": "artifact-2",
+            "exists": True,
+            "verified": True,
+            "reasonCode": "media_artifact_integrity_verified",
+        }):
+            result = self.client.execute("verify", {
+                "connectionId": "conn-1", "retainedArtifactId": "artifact-1", "purpose": "diagnostic",
+            })
+        self.assertFalse(result["isSuccess"])
+        self.assertEqual(["engine_response_invalid"], result["reasonCodes"])
+        self.assertNotIn("artifactId", result)
+
+    def test_verify_rejects_an_unknown_consumer_reason_code(self):
+        self.client._artifact_ids = {"conn-1": {"artifact-1"}}
+        with mock.patch.object(self.client, "_request", return_value={
+            "httpStatus": 200,
+            "artifactId": "artifact-1",
+            "exists": True,
+            "verified": True,
+            "reasonCode": "provider-injected-private-detail",
+        }):
+            result = self.client.execute("verify", {
+                "connectionId": "conn-1", "retainedArtifactId": "artifact-1", "purpose": "diagnostic",
+            })
+        self.assertFalse(result["isSuccess"])
+        self.assertEqual(["engine_response_invalid"], result["reasonCodes"])
+        self.assertNotIn("reasonCode", result)
+
+    def test_verify_projects_failed_consumer_result_and_never_assumes_http_200_success(self):
+        self.client._artifact_ids = {"conn-1": {"artifact-1"}}
+        response = {
+            "httpStatus": 200,
+            "artifactId": "artifact-1",
+            "exists": True,
+            "verified": False,
+            "reasonCode": "media_artifact_integrity_mismatch",
+        }
+        with mock.patch.object(self.client, "_request", return_value=response):
+            result = self.client.execute("verify", {
+                "connectionId": "conn-1", "retainedArtifactId": "artifact-1", "purpose": "diagnostic",
+            })
+        self.assertFalse(result["isSuccess"])
+        self.assertTrue(result["exists"])
+        self.assertFalse(result["verified"])
+        self.assertEqual(["media_artifact_integrity_mismatch"], result["reasonCodes"])
+
+    def test_verify_rejects_inconsistent_success_and_integrity_reason(self):
+        self.client._artifact_ids = {"conn-1": {"artifact-1"}}
+        with mock.patch.object(self.client, "_request", return_value={
+            "httpStatus": 200,
+            "artifactId": "artifact-1",
+            "exists": True,
+            "verified": True,
+            "reasonCode": "media_artifact_integrity_mismatch",
+        }):
+            result = self.client.execute("verify", {
+                "connectionId": "conn-1", "retainedArtifactId": "artifact-1", "purpose": "diagnostic",
+            })
+        self.assertFalse(result["isSuccess"])
+        self.assertEqual(["engine_response_invalid"], result["reasonCodes"])
+        self.assertNotIn("reasonCode", result)
+
+    def test_verify_rejects_artifact_id_only_success_shape(self):
+        self.client._artifact_ids = {"conn-1": {"artifact-1"}}
+        with mock.patch.object(self.client, "_request", return_value={
+            "httpStatus": 200, "artifactId": "artifact-1",
+        }):
+            result = self.client.execute("verify", {
+                "connectionId": "conn-1", "retainedArtifactId": "artifact-1", "purpose": "diagnostic",
+            })
+        self.assertFalse(result["isSuccess"])
+        self.assertEqual(["engine_response_invalid"], result["reasonCodes"])
+
+    def test_graph_prepare_replaces_only_a_reconciled_terminal_ticket(self):
+        first_invocation = "a" * 64
+        second_invocation = "b" * 64
+        first_prepare = {
+            "isSuccess": True, "invocationRef": first_invocation, "scopeId": "scope-old",
+            "rootJobId": "job-old", "graphHash": "c" * 64, "expiresUtc": "2026-11-19T20:00:00Z",
+        }
+        first_submit = {
+            "isSuccess": True, "invocationRef": first_invocation, "scopeId": "scope-old",
+            "rootJobId": "job-old", "graphHash": "c" * 64, "status": "Running",
+        }
+        first_terminal = {
+            "isSuccess": True, "invocationRef": first_invocation,
+            "status": {
+                "status": "Failed",
+                "projection": observation_projection("scope-old", state="failed"),
+                "nextCursor": observation_cursor("scope-old"),
+            },
+        }
+        second_prepare = {
+            "isSuccess": True, "invocationRef": second_invocation, "scopeId": "scope-new",
+            "rootJobId": "job-new", "graphHash": "d" * 64, "expiresUtc": "2026-11-19T20:05:00Z",
+        }
+        with mock.patch.object(
+            self.client, "_request", side_effect=[first_prepare, first_submit, first_terminal, second_prepare]
+        ):
+            self.client.execute("graphPrepareBrowse", {"connectionId": "conn-1", "locationKind": "my_drive_root"})
+            self.client.execute("graphSubmitBrowse", {"graphKind": "browse"})
+            failed = self.client.execute("graphStatus", {"graphKind": "browse"})
+            fresh = self.client.execute("graphPrepareBrowse", {
+                "connectionId": "conn-1", "locationKind": "folder", "locationRef": "folder-new",
+            })
+        self.assertFalse(failed["isSuccess"])
+        self.assertTrue(fresh["isSuccess"])
+        self.assertEqual(second_invocation, self.client._graph_bindings["browse"]["invocationRef"])
+        self.assertEqual("scope-new", self.client._graph_bindings["browse"]["scopeId"])
+        self.assertFalse(self.client._graph_bindings["browse"]["submitted"])
+
+    def test_graph_prepare_rejects_a_second_prepare_before_reconciliation(self):
+        prepare = {
+            "isSuccess": True, "invocationRef": "p" * 64, "scopeId": "scope-prepared",
+            "rootJobId": "job-prepared", "graphHash": "q" * 64,
+            "expiresUtc": "2026-11-19T20:00:00Z",
+        }
+        with mock.patch.object(self.client, "_request", return_value=prepare) as request:
+            first = self.client.execute("graphPrepareBrowse", {
+                "connectionId": "conn-1", "locationKind": "my_drive_root",
+            })
+            with self.assertRaisesRegex(DriveClientError, "graph_reconciliation_required"):
+                self.client.execute("graphPrepareBrowse", {
+                    "connectionId": "conn-1", "locationKind": "shared_with_me",
+                })
+        self.assertTrue(first["isSuccess"])
+        self.assertEqual(1, request.call_count)
+
     def test_explicit_artifact_id_supports_post_reload_access_without_in_process_binding(self):
         self.client._connection_ids.clear()
         with mock.patch.object(self.client, "_request", return_value={"isSuccess": True}) as request:

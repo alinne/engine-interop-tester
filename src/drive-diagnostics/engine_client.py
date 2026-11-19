@@ -79,6 +79,18 @@ _PUBLIC_HTTP_TRANSPORT_REASON_CODES = frozenset((
     "cloud_external_media_operation_failed",
     "media_artifact_caller_unavailable",
 ))
+# Verify is a consumer-facing acknowledgement, but its reason is still an
+# Engine-owned finite vocabulary.  Keep all outcomes emitted by
+# MediaArtifactLifecycleService.VerifyAsync and the media-artifact-set
+# visibility checks; never relay an arbitrary provider or proxy string.
+_MEDIA_ARTIFACT_VERIFY_REASON_CODES = frozenset((
+    "media_artifact_integrity_verified",
+    "media_artifact_integrity_mismatch",
+    "media_artifact_not_found",
+    "media_artifact_invalid_state",
+    "media_artifact_set_read_before_published",
+    "media_artifact_set_operation_not_completed",
+))
 
 
 def _project_http_error(data: bytes, status: int) -> dict[str, Any]:
@@ -332,7 +344,16 @@ class DriveClient:
             body=request_body,
             expect_binary=action == "verifiedRead",
         )
-        result = self._normalize_published_shape(action, result)
+        expected_artifact_id = (
+            body.get("__routeArtifactId")
+            if action == "verify" and isinstance(body, Mapping)
+            else None
+        )
+        result = self._normalize_published_shape(
+            action,
+            result,
+            expected_artifact_id=expected_artifact_id,
+        )
         raw_result = result
         result = self._sanitize(action, result, selected_connection=selected_connection)
         if action in {"graphPrepareBrowse", "graphPrepareAcquire", "graphSubmitBrowse", "graphSubmitAcquire", "graphStatus", "graphWatch", "graphCancel"}:
@@ -409,7 +430,12 @@ class DriveClient:
         return {"isSuccess": result.get("isSuccess") is True}
 
     @staticmethod
-    def _normalize_published_shape(action: str, result: Mapping[str, Any]) -> dict[str, Any]:
+    def _normalize_published_shape(
+        action: str,
+        result: Mapping[str, Any],
+        *,
+        expected_artifact_id: str | None = None,
+    ) -> dict[str, Any]:
         """Normalize published DTOs before their safe consumer projection."""
         normalized = dict(result)
         status = result.get("httpStatus")
@@ -476,6 +502,55 @@ class DriveClient:
             normalized["retainedArtifactId"] = artifact_id
             normalized["isSuccess"] = True
             normalized["reasonCodes"] = _reason_codes(result.get("reasonCodes"))
+            return normalized
+        if action == "verify" and isinstance(status, int) and 200 <= status < 300:
+            # The consumer route returns a verification acknowledgement rather
+            # than an operation envelope. A 2xx plus only an artifact id is not
+            # proof of existence or integrity; require the published booleans
+            # before deriving the app-level success bit.
+            artifact_id = _canonical_artifact_value(result.get("artifactId"))
+            exists = result.get("exists")
+            verified = result.get("verified")
+            reason_code = result.get("reasonCode")
+            if (
+                not isinstance(artifact_id, str)
+                or not _valid_opaque_artifact_id(artifact_id)
+                or not isinstance(expected_artifact_id, str)
+                or not _valid_opaque_artifact_id(expected_artifact_id)
+                or artifact_id != expected_artifact_id
+                or type(exists) is not bool
+                or type(verified) is not bool
+                or not isinstance(reason_code, str)
+                or not reason_code
+                or len(reason_code) > 128
+                or reason_code not in _MEDIA_ARTIFACT_VERIFY_REASON_CODES
+                or (
+                    (reason_code == "media_artifact_integrity_verified"
+                     and (exists is not True or verified is not True))
+                    or (reason_code == "media_artifact_integrity_mismatch"
+                        and (exists is not True or verified is not False))
+                    or (reason_code not in {
+                        "media_artifact_integrity_verified",
+                        "media_artifact_integrity_mismatch",
+                    } and (exists is not False or verified is not False))
+                )
+            ):
+                return {"isSuccess": False, "reasonCodes": ["engine_response_invalid"], "httpStatus": status}
+            # Some internal Engine projections also include source and
+            # observed digests. Validate those fields when present without
+            # requiring them from the consumer-safe route response.
+            for key in ("expectedSha256", "actualSha256"):
+                value = result.get(key)
+                if value is not None and (
+                    not isinstance(value, str) or not re.fullmatch(r"[0-9a-fA-F]{64}", value)
+                ):
+                    return {"isSuccess": False, "reasonCodes": ["engine_response_invalid"], "httpStatus": status}
+            normalized["artifactId"] = artifact_id
+            normalized["exists"] = exists
+            normalized["verified"] = verified
+            normalized["reasonCode"] = reason_code
+            normalized["isSuccess"] = exists and verified
+            normalized["reasonCodes"] = [] if normalized["isSuccess"] else [_reason_codes(reason_code)[0]]
             return normalized
         # Graph lifecycle DTOs are authoritative even if a legacy/proxy
         # response also carries an optimistic isSuccess field.  Do not let an
@@ -721,7 +796,7 @@ class DriveClient:
         if action in {"graphPrepareBrowse", "graphPrepareAcquire"}:
             kind = "browse" if action == "graphPrepareBrowse" else "acquire"
             existing = self._graph_bindings.get(kind)
-            if existing and existing.get("submitted") and not existing.get("statusTerminal"):
+            if existing and existing.get("statusTerminal") is not True:
                 raise DriveClientError("graph_reconciliation_required")
             base_action = "browse" if graph_kind == "browse" else "acquire"
             body = self._bound_body(base_action, payload)
@@ -1041,6 +1116,17 @@ class DriveClient:
             output["publication"] = _safe_record(result["publication"])
         if isinstance(result.get("connection"), Mapping):
             output["connection"] = _safe_record(result["connection"])
+        if action == "verify":
+            for key in ("exists", "verified"):
+                if type(result.get(key)) is bool:
+                    output[key] = result[key]
+            reason_code = result.get("reasonCode")
+            if isinstance(reason_code, str) and reason_code and len(reason_code) <= 128:
+                output["reasonCode"] = reason_code
+            for key in ("expectedSha256", "actualSha256"):
+                digest = result.get(key)
+                if isinstance(digest, str) and re.fullmatch(r"[0-9a-fA-F]{64}", digest):
+                    output[key] = digest.lower()
         if action in {"graphPrepareBrowse", "graphPrepareAcquire", "graphSubmitBrowse", "graphSubmitAcquire", "graphStatus", "graphWatch", "graphCancel"}:
             _append_safe_graph_fields(output, result)
         return output
@@ -1128,7 +1214,12 @@ class DriveClient:
         if action in {"graphSubmitBrowse", "graphSubmitAcquire", "graphStatus", "graphWatch"} and (
                 not isinstance(invocation, str) or invocation != binding.get("invocationRef")):
             return self._graph_binding_failure(output)
-        if isinstance(invocation, str) and invocation and invocation != binding.get("invocationRef"):
+        if (
+            action not in {"graphPrepareBrowse", "graphPrepareAcquire"}
+            and isinstance(invocation, str)
+            and invocation
+            and invocation != binding.get("invocationRef")
+        ):
             return self._graph_binding_failure(output)
         if action == "graphCancel":
             http_status = raw.get("httpStatus")
