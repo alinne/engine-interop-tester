@@ -62,7 +62,19 @@ if ($bindings.sourceCommit -notmatch '^[a-f0-9]{40}$' -or @($bindings.operations
     throw 'Drive route projection provenance is invalid.'
 }
 foreach ($entry in $bindings.operations.PSObject.Properties) {
-    if ($entry.Value.path -notmatch '^/engine/v1/(cloud/|media/artifacts/)' -or $entry.Value.method -notin @('GET', 'POST')) {
+    $capabilityRoute = $entry.Value.path -match '^/engine/v1/(cloud/|media/artifacts/)'
+    # The diagnostic consumer uses only the Engine-owned external-media launch
+    # surface and canonical graph observation/control for its bound invocation.
+    $graphRoute = switch ($entry.Name) {
+        graphPrepareBrowse { $entry.Value.path -ceq '/engine/v1/external-media/tenants/{tenantId}/prepare/browse' }
+        graphPrepareAcquire { $entry.Value.path -ceq '/engine/v1/external-media/tenants/{tenantId}/prepare/acquire-retained' }
+        graphSubmitBrowse { $entry.Value.path -ceq '/engine/v1/external-media/tenants/{tenantId}/scopes/{scopeId}/invocations/{invocationRef}/browse' }
+        graphSubmitAcquire { $entry.Value.path -ceq '/engine/v1/external-media/tenants/{tenantId}/scopes/{scopeId}/invocations/{invocationRef}/acquire-retained' }
+        graphStatus { $entry.Value.path -ceq '/engine/v1/graph-jobs/tenants/{tenantId}/scopes/{scopeId}/invocations/{invocationRef}/status' }
+        graphCancel { $entry.Value.path -ceq '/engine/v1/graph-jobs/tenants/{tenantId}/scopes/{scopeId}/invocations/{invocationRef}/cancel' }
+        default { $false }
+    }
+    if ((-not $capabilityRoute -and -not $graphRoute) -or $entry.Value.method -notin @('GET', 'POST')) {
         throw 'Drive projection escapes its Engine cloud capability.'
     }
 }

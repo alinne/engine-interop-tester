@@ -58,12 +58,12 @@
 <option value="shared-drive-folder">Selected shared-drive folder</option>
 </select>
 </div>
-<p class="hint">Browse is metadata-only. The view and continuation cursor stay bound to the selected Engine connection.</p>
+<p class="hint">Browse is metadata-only. The location and continuation cursor stay bound to the selected Engine connection; provider IDs and resource keys remain inside Engine.</p>
 <label for="folder">Folder returned by Engine</label>
 <select id="folder">
 <option value="">Choose a connection first</option>
 </select>
-<button id="files">List files in selected folder (legacy)</button>
+<button id="files">List files in selected folder (compatibility)</button>
 <button id="next-page" hidden>Load next page</button>
 <div id="pagination" class="notice" hidden>Engine returned a continuation cursor. Continue only within this connection and view.</div>
 <div class="table-scroll">
@@ -89,26 +89,78 @@
 <span class="number">04</span>
 <h2>Retain &amp; inspect</h2>
 <p id="selection" role="status" aria-live="polite">Select one ISO or DICOM file.</p>
+<div class="form-grid">
+<label for="artifact-id">Opaque artifact ID (required for this attempt)</label>
+<input id="artifact-id" maxlength="160" placeholder="vault-drive-study-001">
+<label for="maximum-bytes">Maximum bytes</label>
+<input id="maximum-bytes" inputmode="numeric" value="1073741824">
+<label for="maximum-duration">Maximum duration (seconds)</label>
+<input id="maximum-duration" inputmode="numeric" value="3600">
+<label for="publication-file-name">Retained file name</label>
+<input id="publication-file-name" maxlength="512" placeholder="study.dcm">
+<label for="publication-role">Retention role</label>
+<input id="publication-role" maxlength="256" value="source">
+<label for="publication-kind">Artifact kind</label>
+<select id="publication-kind"><option value="SourceMedia">Source media</option></select>
+<label for="publication-classification">Data classification</label>
+<select id="publication-classification"><option value="Restricted">Restricted</option><option value="SpecialCategory">Special category</option></select>
+<label for="publication-subject-ids">Subject IDs (comma-separated, optional)</label>
+<input id="publication-subject-ids" placeholder="">
+<label for="publication-allowed-purposes">Allowed purposes</label>
+<input id="publication-allowed-purposes" value="vault-diagnostics.inspect">
+<label for="publication-consent-purposes">Consent-required purposes (optional)</label>
+<input id="publication-consent-purposes" placeholder="">
+<label for="publication-retention-policy">Retention policy ID</label>
+<input id="publication-retention-policy" value="policy:drive-diagnostics">
+<label for="publication-retention-class">Retention class</label>
+<select id="publication-retention-class"><option value="Tier1_Operational">Tier 1 operational</option><option value="Tier2_Audit">Tier 2 audit</option></select>
+<label for="publication-idempotency">Publication idempotency key</label>
+<input id="publication-idempotency" placeholder="drive-diagnostics-attempt-001">
+</div>
 <div class="buttons">
 <button id="acquire">Acquire selected file</button>
 <button id="inspect">Inspect retained artifact</button>
 <button id="verify">Verify retained artifact</button>
+<button id="verified-read">Verified read (discard bytes)</button>
+<label for="access-purpose">Access purpose</label>
+<input id="access-purpose" value="vault-diagnostics.inspect" maxlength="128">
 <button id="materialize">Materialize verified artifact</button>
+<label for="relative-output-path">Relative output path (Engine-approved root)</label>
+<input id="relative-output-path" placeholder="diagnostics/study.dcm" maxlength="4096">
+<label for="release-idempotency">Release idempotency key</label>
+<input id="release-idempotency" placeholder="drive-diagnostics-release-001" maxlength="256">
 <button id="release">Release retained artifact</button>
 </div>
-<p class="notice">Acquisition is always explicit: browsing never downloads or opens patient content. This harness shows metadata and Engine receipts only; it does not expose local paths or file bytes.</p>
+<p id="retained-artifact-status" class="artifact-status" role="status" aria-live="polite">No retained artifact is bound to this connection yet.</p>
+<p class="notice">Acquisition is always explicit: browsing never downloads or opens patient content. Verified read is explicit and discards bytes after a bounded diagnostic transfer; it never displays or saves content. Materialization remains Engine-custodied.</p>
 </section>
 <section>
 <span class="number">05</span>
+<h2>Graph execution</h2>
+<p>Prepare and submit a canonical Engine graph, then reconcile durable status before any new attempt. There is no automatic retry.</p>
+<div class="buttons">
+<button id="graph-prepare-browse">Prepare browse graph</button>
+<button id="graph-prepare-acquire">Prepare acquire graph</button>
+<button id="graph-submit">Submit prepared graph</button>
+<button id="graph-status">Reconcile graph status</button>
+</div>
+<label for="graph-kind">Prepared graph</label>
+<select id="graph-kind"><option value="browse">Browse</option><option value="acquire">Acquire</option></select>
+<label for="graph-cancel-idempotency">Cancel idempotency key</label>
+<input id="graph-cancel-idempotency" maxlength="256" placeholder="drive-diagnostics-cancel-001">
+<button id="graph-cancel">Request graph cancellation</button>
+<p class="hint">Cancellation is an intent-only request. Engine owns the durable graph control plan. A failed or uncertain submit is reconciled with status; after a terminal result, prepare a fresh graph before explicitly submitting again.</p>
+</section>
+<section>
+<span class="number">06</span>
 <h2>Connection controls</h2>
 <p>Provider revocation is a separate explicit action and is never inferred from sign-out or a refresh.</p>
 <div class="buttons">
 <button id="revoke">Revoke selected connection</button>
-<button id="graph">Probe Drive graph/node capability</button>
 </div>
 </section>
 <section>
-<span class="number">06</span>
+<span class="number">07</span>
 <h2>Result</h2>
 <p id="status" role="status" aria-live="polite">Ready to check Engine.</p>
 <pre id="result">No requests made.</pre>

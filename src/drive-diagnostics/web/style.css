@@ -68,7 +68,7 @@ section {
   flex-wrap:wrap;
   gap:8px
 }
-button,select {
+button,select,input {
   font:inherit;
   border:1px solid #c7d4e4;
   border-radius:8px;
@@ -98,8 +98,19 @@ label {
   font-weight:650;
   margin-top:16px
 }
-select {
+select,input {
   width:100%
+}
+.form-grid {
+  display:grid;
+  grid-template-columns:1fr 1fr;
+  gap:0 14px
+}
+.form-grid label {
+  grid-column:span 1
+}
+.form-grid input,.form-grid select {
+  grid-column:span 1
 }
 .hint {
   font-size:12px
@@ -132,6 +143,16 @@ select {
   border-left:3px solid #d3a747;
   padding:12px;
   color:#725219
+}
+.artifact-status {
+  margin-top:16px;
+  padding:10px 12px;
+  border:1px solid #c9d9ed;
+  border-radius:8px;
+  background:#f3f8ff;
+  color:#274a78;
+  font-size:13px;
+  overflow-wrap:anywhere
 }
 .table-scroll {
   overflow:auto
@@ -194,6 +215,9 @@ h1 {
 .section-top {
   align-items:start;
   flex-direction:column
+}
+.form-grid {
+  grid-template-columns:1fr
 }
 
 }

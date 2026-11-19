@@ -120,6 +120,58 @@ class ServerTests(unittest.TestCase):
             self.assertTrue(json.load(response)["isSuccess"])
         self.assertEqual([("readiness", {})], self.client.calls)
 
+    def test_canonical_browse_payload_reaches_client_without_legacy_view(self):
+        csrf = self.bootstrap()
+        payload = {
+            "action": "browse",
+            "payload": {
+                "connectionId": "connection:opaque",
+                "locationKind": "folder",
+                "locationRef": "folder:opaque",
+                "driveId": "drive:opaque",
+                "pageSize": "100",
+                "continuationToken": "cursor:opaque",
+            },
+        }
+        with self.post(payload, csrf=csrf) as response:
+            self.assertTrue(json.load(response)["isSuccess"])
+        self.assertEqual([("browse", payload["payload"])], self.client.calls)
+
+    def test_canonical_acquire_publication_payload_is_allowlisted(self):
+        csrf = self.bootstrap()
+        publication = {
+            "fileName": "study.dcm",
+            "role": "source",
+            "kind": "SourceMedia",
+            "classification": "Restricted",
+            "subjectIds": [],
+            "allowedPurposes": ["diagnostic"],
+            "consentRequiredPurposes": [],
+            "retentionPolicyId": "policy:test",
+            "retentionClass": "Tier1_Operational",
+            "idempotencyKey": "attempt:test",
+        }
+        payload = {"action": "acquire", "payload": {
+            "connectionId": "connection:opaque", "selectionRef": "selection:opaque",
+            "maximumBytes": "1024", "maximumDurationSeconds": "60", "artifactId": "artifact:test",
+            "publication": publication,
+        }}
+        with self.post(payload, csrf=csrf) as response:
+            self.assertTrue(json.load(response)["isSuccess"])
+        self.assertEqual([("acquire", payload["payload"])], self.client.calls)
+
+    def test_publication_nested_unknown_property_is_rejected_before_client(self):
+        csrf = self.bootstrap()
+        payload = {"action": "acquire", "payload": {
+            "selectionRef": "selection:opaque",
+            "publication": {"fileName": "x", "providerToken": "secret"},
+        }}
+        with self.assertRaises(HTTPError) as error:
+            self.post(payload, csrf=csrf)
+        self.assertEqual(400, error.exception.code)
+        error.exception.close()
+        self.assertEqual([], self.client.calls)
+
     def test_cross_origin_request_never_reaches_engine(self):
         csrf = self.bootstrap()
         with self.assertRaises(HTTPError) as error:
@@ -144,9 +196,27 @@ class ServerTests(unittest.TestCase):
     def test_oversized_request_is_rejected(self):
         csrf = self.bootstrap()
         with self.assertRaises(HTTPError) as error:
-            self.post({"action": "assets", "payload": {"collectionRef": "x" * 17000}}, csrf=csrf)
+            self.post({"action": "assets", "payload": {"collectionRef": "x" * 70000}}, csrf=csrf)
         self.assertEqual(413, error.exception.code)
         error.exception.close()
+
+    def test_graph_cancel_idempotency_intent_is_allowlisted(self):
+        csrf = self.bootstrap()
+        payload = {"action": "graphCancel", "payload": {"graphKind": "browse", "idempotencyKey": "cancel-1"}}
+        with self.post(payload, csrf=csrf) as response:
+            self.assertTrue(json.load(response)["isSuccess"])
+        self.assertEqual([("graphCancel", payload["payload"])], self.client.calls)
+
+    def test_graph_cancel_rejects_unknown_control_plan_or_non_string_intent(self):
+        csrf = self.bootstrap()
+        for payload in ({"graphKind": "browse", "controlPlan": {"operation": "cancel"}},
+                        {"graphKind": "browse", "idempotencyKey": True}):
+            with self.subTest(payload=payload):
+                with self.assertRaises(HTTPError) as error:
+                    self.post({"action": "graphCancel", "payload": payload}, csrf=csrf)
+                self.assertEqual(400, error.exception.code)
+                error.exception.close()
+        self.assertEqual([], self.client.calls)
 
     def test_unknown_action_is_rejected(self):
         csrf = self.bootstrap()

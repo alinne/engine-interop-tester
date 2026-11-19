@@ -11,12 +11,59 @@ ACTIONS = frozenset((
     "readiness", "start", "status", "connections", "collections", "assets",
     "browse", "acquire", "inspect", "verifiedRead", "verify", "materialize",
     "release", "revoke", "graph",
+    "graphPrepareBrowse", "graphPrepareAcquire", "graphSubmitBrowse", "graphSubmitAcquire",
+    "graphStatus", "graphCancel",
 ))
 PAYLOAD_KEYS = frozenset((
-    "connectionId", "collectionRef", "assetId", "continuationToken", "view",
+    "connectionId", "collectionRef", "assetId", "selectionRef", "opaqueSelectionRef",
+    "continuationToken", "view", "locationKind", "locationRef", "driveId", "pageSize",
+    "maximumBytes", "maximumDurationSeconds", "publication",
     "retainedArtifactId", "artifactId", "operationRef", "graphInvocationRef",
-    "purpose", "sessionId", "correlationId", "traceparent",
+    "purpose", "relativeOutputPath", "idempotencyKey", "sessionId", "correlationId", "traceparent",
+    "graphKind", "explicitRetry",
 ))
+_NUMERIC_PAYLOAD_KEYS = frozenset(("pageSize", "maximumBytes", "maximumDurationSeconds"))
+_PUBLICATION_KEYS = frozenset((
+    "fileName", "role", "kind", "classification", "subjectIds", "allowedPurposes",
+    "consentRequiredPurposes", "retentionPolicyId", "retentionClass", "idempotencyKey",
+    "sessionId", "correlationId", "traceparent",
+))
+
+
+def _valid_payload(payload):
+    if not isinstance(payload, dict) or set(payload) - PAYLOAD_KEYS:
+        return False
+    for key, value in payload.items():
+        if key == "publication":
+            if not isinstance(value, dict) or set(value) - _PUBLICATION_KEYS:
+                return False
+            for nested_key, nested_value in value.items():
+                if nested_key in {"subjectIds", "allowedPurposes", "consentRequiredPurposes"}:
+                    if not isinstance(nested_value, list) or len(nested_value) > 32 or any(
+                        not isinstance(item, str) or not item or len(item) > 128 for item in nested_value
+                    ):
+                        return False
+                elif nested_key == "retentionPolicyId":
+                    if not isinstance(nested_value, str) or not nested_value or len(nested_value) > 256:
+                        return False
+                elif not isinstance(nested_value, str) or not nested_value or len(nested_value) > 4096:
+                    return False
+            continue
+        if key == "explicitRetry":
+            if not isinstance(value, bool):
+                return False
+            continue
+        if key == "graphKind":
+            if not isinstance(value, str) or value not in {"browse", "acquire"}:
+                return False
+            continue
+        if key in _NUMERIC_PAYLOAD_KEYS:
+            if not isinstance(value, (str, int)) or isinstance(value, bool) or len(str(value)) > 32:
+                return False
+            continue
+        if not isinstance(value, str) or len(value) > 4096:
+            return False
+    return True
 
 
 def make_server(client, port=8765):
@@ -128,17 +175,20 @@ def make_server(client, port=8765):
                         or not isinstance(request.get("action"), str) or request["action"] not in ACTIONS):
                     return self.reject(400, "diagnostic_action_not_allowed")
                 payload = request.get("payload", {})
-                if (not isinstance(payload, dict) or set(payload) - PAYLOAD_KEYS
-                        or any(not isinstance(value, str) or len(value) > 4096 for value in payload.values())):
+                if not _valid_payload(payload):
                     return self.reject(400)
                 # Browse is metadata-only, and acquisition is always an
                 # explicit selected-asset action.  The bridge never starts an
                 # acquisition from a list response or a missing selection.
                 action = request["action"]
-                if action == "acquire" and not payload.get("assetId"):
+                if action == "acquire" and not (payload.get("selectionRef") or payload.get("opaqueSelectionRef") or payload.get("assetId")):
                     return self.reject(400, "asset_selection_required")
-                if action == "browse" and payload.get("view") not in (None, "my-drive", "shared-with-me", "shared-drives", "shared-drive-folder"):
-                    return self.reject(400, "browse_view_invalid")
+                if action == "browse":
+                    location_kind = payload.get("locationKind")
+                    if location_kind is not None and location_kind not in {
+                        "my_drive_root", "shared_with_me", "shared_drives", "shared_drive", "folder"
+                    }:
+                        return self.reject(400, "browse_location_invalid")
             except (ValueError, TimeoutError):
                 return self.reject(400)
             try:

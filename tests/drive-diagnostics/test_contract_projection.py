@@ -73,3 +73,30 @@ class ContractProjectionTests(unittest.TestCase):
         result = projection.project(self.root)
         self.assertEqual('/engine/v1/cloud/media:browse', result['operations']['browse']['path'])
         self.assertEqual(4, len(result['sourceHashes']))
+
+    def test_graph_routes_follow_committed_multiline_declarations(self):
+        family = "ExternalMediaGraph"
+        member = "PrepareBrowseTemplate"
+        operation = "external-media.graph.prepare-browse"
+        self.catalog.write_text(self.catalog.read_text() +
+            f'\nInternal("{operation}", "POST", EngineControlApiRoutes.{family}.{member},')
+        graph = self.root / projection.OPTIONAL_SOURCE_FILES[1]
+        graph.write_text('public static class ExternalMediaGraph\n    {\n'
+                         '        public const string PrepareBrowseTemplate =\n'
+                         '            "/engine/v1/external-media/tenants/{tenantId}/prepare/browse";\n    }')
+        self.run_git('add', '.')
+        self.run_git('-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '-qm', 'graph operation')
+        result = projection.project(self.root)
+        self.assertEqual('POST', result['operations']['graphPrepareBrowse']['method'])
+        self.assertEqual('/engine/v1/external-media/tenants/{tenantId}/prepare/browse',
+                         result['operations']['graphPrepareBrowse']['path'])
+        self.assertIn(str(graph.relative_to(self.root)), result['sourceHashes'])
+
+    def test_graph_route_without_catalog_authority_is_rejected(self):
+        graph = self.root / projection.OPTIONAL_SOURCE_FILES[1]
+        graph.write_text('public static class ExternalMediaGraph\n    {\n'
+                         '        public const string PrepareBrowseTemplate = "/unregistered";\n    }')
+        self.run_git('add', '.')
+        self.run_git('-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '-qm', 'unregistered graph operation')
+        with self.assertRaisesRegex(ValueError, 'Missing canonical optional operation'):
+            projection.project(self.root)

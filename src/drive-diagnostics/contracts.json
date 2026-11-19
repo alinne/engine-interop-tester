@@ -1,10 +1,13 @@
 {
   "sourceRepository": "alinne/linnaeus-engine",
-  "sourceCommit": "7946f96b1c44f123d024889e8815ca4faedfec82",
+  "sourceCommit": "b87f8d7b2e351e1d3c01afe8ef8bc7c9453c3ca2",
   "sourceHashes": {
-    "src/Linnaeus.Engine.ModelFabric.Contracts/EngineControlApiRoutes.cs": "e812ae61346d68f4b4a1be239c9c37aee516391dfcf49415d0aa6268083e94a3",
+    "src/Linnaeus.Engine.ModelFabric.Contracts/EngineControlApiRoutes.cs": "c7a13afa0d235e04b9fa1d0de50e6c85914e0174c810dbce2408386b486dc869",
     "src/Linnaeus.Engine.ModelFabric.Contracts/EngineControlApiRoutes.Media.cs": "024d79c3f57fa973453db823373f53bdb2278b161bc0ef379ca38bef7e03a3b9",
-    "src/Linnaeus.Engine.ModelFabric.Contracts/EngineControlApiRoutes.Control.cs": "8d7c7eeb7f4107d823bf822b8d2ab6067fb71da3ba206944a8c9042d8af9c373"
+    "src/Linnaeus.Engine.ModelFabric.Contracts/EngineControlApiRoutes.Control.cs": "f78b4bed988fa8d0d29377284a18dbb03275fc5b112d2871ed43bab2e04e5b34",
+    "src/Linnaeus.Engine.ModelFabric.Contracts/EngineControlApiRoutes.MediaArtifactLifecycle.cs": "0f6287ecc4e6391987a3c95b275848ae8d50c37f41c8fda97c9129ac3440247f",
+    "src/Linnaeus.Engine.ModelFabric.Contracts/EngineControlApiRoutes.ExternalMediaGraph.cs": "d45ffcd5617bffa5b6a41c66276b4269b000ef07af1605bff54d0b1ac260be56",
+    "src/Linnaeus.Engine.ModelFabric.Contracts/EngineControlApiRoutes.GraphJobs.cs": "dbc53f5d6ba3670235e90a312b1b1f56710a9aa1f477de91d6c285ad5b5ff152"
   },
   "operations": {
     "readiness": {
@@ -47,6 +50,96 @@
       "operationId": "cloud-media.oauth.callback",
       "method": "GET",
       "path": "/engine/v1/cloud/oauth/callback/{providerId}",
+      "visibility": "stable"
+    },
+    "graphPrepareBrowse": {
+      "operationId": "external-media.graph.prepare-browse",
+      "method": "POST",
+      "path": "/engine/v1/external-media/tenants/{tenantId}/prepare/browse",
+      "visibility": "internal"
+    },
+    "graphPrepareAcquire": {
+      "operationId": "external-media.graph.prepare-acquire-retained",
+      "method": "POST",
+      "path": "/engine/v1/external-media/tenants/{tenantId}/prepare/acquire-retained",
+      "visibility": "internal"
+    },
+    "graphSubmitBrowse": {
+      "operationId": "external-media.graph.browse",
+      "method": "POST",
+      "path": "/engine/v1/external-media/tenants/{tenantId}/scopes/{scopeId}/invocations/{invocationRef}/browse",
+      "visibility": "internal"
+    },
+    "graphSubmitAcquire": {
+      "operationId": "external-media.graph.acquire-retained",
+      "method": "POST",
+      "path": "/engine/v1/external-media/tenants/{tenantId}/scopes/{scopeId}/invocations/{invocationRef}/acquire-retained",
+      "visibility": "internal"
+    },
+    "graphStatus": {
+      "operationId": "graph-job.observation.status",
+      "method": "GET",
+      "path": "/engine/v1/graph-jobs/tenants/{tenantId}/scopes/{scopeId}/invocations/{invocationRef}/status",
+      "visibility": "stable"
+    },
+    "graphCancel": {
+      "operationId": "graph-job.control.cancel",
+      "method": "POST",
+      "path": "/engine/v1/graph-jobs/tenants/{tenantId}/scopes/{scopeId}/invocations/{invocationRef}/cancel",
+      "visibility": "stable"
+    },
+    "browse": {
+      "operationId": "cloud.media.browse",
+      "method": "POST",
+      "path": "/engine/v1/cloud/media:browse",
+      "visibility": "internal"
+    },
+    "acquire": {
+      "operationId": "cloud.media.acquire-retained",
+      "method": "POST",
+      "path": "/engine/v1/cloud/media:acquire-retained",
+      "visibility": "internal"
+    },
+    "revoke": {
+      "operationId": "cloud.connections.revoke",
+      "method": "POST",
+      "path": "/engine/v1/cloud/connections/{connectionId}/revoke",
+      "visibility": "internal"
+    },
+    "inspect": {
+      "operationId": "media.artifacts.inspect",
+      "method": "GET",
+      "path": "/engine/v1/media/artifacts/{artifactId}",
+      "visibility": "stable"
+    },
+    "verifiedRead": {
+      "operationId": "media.artifacts.verified-read",
+      "method": "GET",
+      "path": "/engine/v1/media/artifacts/{artifactId}/content",
+      "visibility": "stable"
+    },
+    "verify": {
+      "operationId": "media.artifacts.verify",
+      "method": "POST",
+      "path": "/engine/v1/media/artifacts/{artifactId}:verify",
+      "visibility": "stable"
+    },
+    "materialize": {
+      "operationId": "media.artifacts.materialize",
+      "method": "POST",
+      "path": "/engine/v1/media/artifacts/{artifactId}:materialize",
+      "visibility": "stable"
+    },
+    "release": {
+      "operationId": "media.artifacts.tombstone",
+      "method": "POST",
+      "path": "/engine/v1/media/artifacts/{artifactId}:tombstone",
+      "visibility": "stable"
+    },
+    "delete": {
+      "operationId": "media.artifacts.delete",
+      "method": "POST",
+      "path": "/engine/v1/media/artifacts/{artifactId}:delete",
       "visibility": "stable"
     }
   }

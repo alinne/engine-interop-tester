@@ -21,6 +21,12 @@ SELECTION = {
 # therefore cannot manufacture routes while the parent Engine change is
 # uncommitted.
 OPTIONAL_SELECTION = {
+    "graphPrepareBrowse": ("ExternalMediaGraph", "PrepareBrowseTemplate", "external-media.graph.prepare-browse"),
+    "graphPrepareAcquire": ("ExternalMediaGraph", "PrepareAcquireRetainedTemplate", "external-media.graph.prepare-acquire-retained"),
+    "graphSubmitBrowse": ("ExternalMediaGraph", "BrowseTemplate", "external-media.graph.browse"),
+    "graphSubmitAcquire": ("ExternalMediaGraph", "AcquireRetainedTemplate", "external-media.graph.acquire-retained"),
+    "graphStatus": ("GraphJobs", "StatusTemplate", "graph-job.observation.status"),
+    "graphCancel": ("GraphJobs", "CancelTemplate", "graph-job.control.cancel"),
     "browse": ("Cloud", "MediaBrowse", "cloud.media.browse"),
     "acquire": ("Cloud", "MediaAcquireRetained", "cloud.media.acquire-retained"),
     "revoke": ("Cloud", "ConnectionRevokeTemplate", "cloud.connections.revoke"),
@@ -34,7 +40,8 @@ OPTIONAL_SELECTION = {
 CONTRACT_ROOT = "src/Linnaeus.Engine.ModelFabric.Contracts/"
 SOURCE_FILES = [CONTRACT_ROOT + "EngineControlApiRoutes" + suffix + ".cs"
                 for suffix in ("", ".Media", ".Control")]
-OPTIONAL_SOURCE_FILES = [CONTRACT_ROOT + "EngineControlApiRoutes.MediaArtifactLifecycle.cs"]
+OPTIONAL_SOURCE_FILES = [CONTRACT_ROOT + "EngineControlApiRoutes" + suffix + ".cs"
+                         for suffix in (".MediaArtifactLifecycle", ".ExternalMediaGraph", ".GraphJobs")]
 
 
 def project(root, source_commit=None):
@@ -62,7 +69,7 @@ def project(root, source_commit=None):
         declaration = re.search(r"public static class " + family + r"\s*\{(.*?)\n    \}", all_text, re.S)
         if not declaration:
             raise ValueError(f"Missing canonical family: {family}")
-        path = re.search(r"public const string " + member + r' = "([^"\r\n]+)";', declaration[1])
+        path = re.search(r"public const string " + member + r'\s*=\s*"([^"\r\n]+)";', declaration[1])
         entry = re.search(r'(Stable|Internal)\("' + re.escape(operation_id) + r'", "([A-Z]+)", EngineControlApiRoutes\.' + family + r"\." + member + r"[,)]", catalog)
         if not path or not entry:
             raise ValueError(f"Missing canonical operation: {operation_id}")
@@ -72,7 +79,7 @@ def project(root, source_commit=None):
         declaration = re.search(r"public static class " + family + r"\s*\{(.*?)\n    \}", all_text, re.S)
         if not declaration:
             continue
-        path = re.search(r"public const string " + member + r' = "([^"\r\n]+)";', declaration[1])
+        path = re.search(r"public const string " + member + r'\s*=\s*"([^"\r\n]+)";', declaration[1])
         entry = re.search(r'(Stable|Internal)\("' + re.escape(operation_id) + r'", "([A-Z]+)", EngineControlApiRoutes\.' + family + r"\." + member + r"[,)]", catalog)
         if not path and not entry:
             continue

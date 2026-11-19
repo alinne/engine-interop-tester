@@ -2,8 +2,11 @@
 let csrf = "";
 let selected = null;
 let retainedArtifact = null;
+let retainedArtifactDetails = null;
 let continuationToken = null;
 let browseContext = null;
+let folderRecords = new Map();
+let graphPreparedKind = null;
 const byId = id => document.getElementById(id);
 const connectionId = () => byId("connection").value;
 function clearResult(message = "Selection changed. Run an action to refresh the diagnostic result.") {
@@ -19,13 +22,33 @@ function clearFiles({resetBrowse = true, clearArtifact = false} = {}) {
   byId("next-page").hidden = true;
   continuationToken = null;
   if (resetBrowse) browseContext = null;
-  if (clearArtifact) retainedArtifact = null;
+  if (clearArtifact) {
+    retainedArtifact = null;
+    retainedArtifactDetails = null;
+    renderRetainedArtifact(null);
+  }
+  if (resetBrowse) graphPreparedKind = null;
 }
 function resetFolders({clearResult: resetResult = false} = {}) {
   byId("folder").replaceChildren(new Option("Load folders for this connection", ""));
+  folderRecords = new Map();
   clearFiles({clearArtifact: true});
   retainedArtifact = null;
   if (resetResult) clearResult();
+}
+function renderRetainedArtifact(record) {
+  const element = byId("retained-artifact-status");
+  if (!element) return;
+  if (!record || typeof record !== "object" || typeof record.artifactId !== "string") {
+    element.textContent = "No retained artifact is bound to this connection yet.";
+    return;
+  }
+  retainedArtifactDetails = record;
+  retainedArtifact = record.artifactId;
+  const details = ["Bound artifact: " + record.artifactId];
+  if (typeof record.contentHash === "string") details.push("hash " + record.contentHash);
+  if (Number.isInteger(record.byteSize)) details.push(record.byteSize + " bytes");
+  element.textContent = details.join(" · ");
 }
 function invalidateBrowseContext() {
   clearFiles({clearArtifact: true});
@@ -42,12 +65,34 @@ function fillSelect(id, items, key, label) {
   element.replaceChildren(new Option("Select…", ""));
   for (const item of items) element.add(new Option(String(item[label] || item[key]), String(item[key])));
 }
+const LOCATION_KINDS = {
+  "my-drive": "my_drive_root",
+  "shared-with-me": "shared_with_me",
+  "shared-drives": "shared_drives",
+  "shared-drive-folder": "folder"
+};
+function publicationPayload() {
+  const list = value => value.split(",").map(item => item.trim()).filter(Boolean);
+  return {
+    fileName: byId("publication-file-name").value.trim(),
+    role: byId("publication-role").value.trim(),
+    kind: byId("publication-kind").value,
+    classification: byId("publication-classification").value,
+    subjectIds: list(byId("publication-subject-ids").value),
+    allowedPurposes: list(byId("publication-allowed-purposes").value),
+    consentRequiredPurposes: list(byId("publication-consent-purposes").value),
+    retentionPolicyId: byId("publication-retention-policy").value.trim(),
+    retentionClass: byId("publication-retention-class").value,
+    idempotencyKey: byId("publication-idempotency").value.trim()
+  };
+}
 function render(action, data) {
   // HTTP success is transport evidence only; Engine's result controls the status.
   const success = data.isSuccess === true;
   byId("status").dataset.failed = String(!success);
   byId("status").textContent = success ? "Engine request succeeded." : "Request did not complete successfully. See reason codes below.";
   byId("result").textContent = JSON.stringify(data, null, 2);
+  if (data.retainedArtifact && typeof data.retainedArtifact === "object") renderRetainedArtifact(data.retainedArtifact);
   if (action === "start") {
     const link = byId("consent");
     link.hidden = true;
@@ -64,11 +109,17 @@ function render(action, data) {
     resetFolders();
     fillSelect("connection", success ? data.connections || [] : [], "connectionId", "connectionId");
   }
-  if (action === "browse") {
+  if (action === "browse" || action === "graphSubmitBrowse") {
     clearFiles({resetBrowse: false, clearArtifact: true});
     const collections = success ? data.collections || [] : [];
-    fillSelect("folder", collections, "collectionRef", "displayName");
-    if (success && browseContext?.collectionRef) byId("folder").value = browseContext.collectionRef;
+    folderRecords = new Map(collections.map(item => [String(item.collectionRef || item.collectionId || ""), item]));
+    const folderSelect = byId("folder");
+    folderSelect.replaceChildren(new Option("Select…", ""));
+    for (const item of collections) {
+      const ref = item.collectionRef || item.collectionId;
+      if (ref) folderSelect.add(new Option(String(item.displayName || item.name || ref), String(ref)));
+    }
+    if (success && browseContext?.locationRef) byId("folder").value = browseContext.locationRef;
     renderAssets(success ? (data.assets || data.items || []) : []);
     continuationToken = success ? (data.continuationToken || data.nextPageToken || null) : null;
     if (!success) browseContext = null;
@@ -82,7 +133,19 @@ function render(action, data) {
     renderAssets(success ? data.assets || [] : []);
   }
   if (["acquire", "materialize"].includes(action) && success) {
-    retainedArtifact = data.retainedArtifactId || data.artifactId || data.artifacts?.[0]?.retainedArtifactId || data.artifacts?.[0]?.artifactId || null;
+    const publicationArtifact = data.publication?.artifactId;
+    const id = data.retainedArtifactId || data.artifactId || publicationArtifact || data.artifacts?.[0]?.retainedArtifactId || data.artifacts?.[0]?.artifactId || null;
+    if (id) renderRetainedArtifact({artifactId: id});
+  }
+  if (["graphSubmitAcquire", "graphStatus"].includes(action) && success && data.retainedArtifact) {
+    renderRetainedArtifact(data.retainedArtifact);
+  }
+  if (["graphPrepareBrowse", "graphPrepareAcquire"].includes(action) && success) {
+    graphPreparedKind = action === "graphPrepareBrowse" ? "browse" : "acquire";
+    byId("graph-kind").value = graphPreparedKind;
+  }
+  if (action === "graphStatus" && success) {
+    byId("status").textContent = "Graph status inspected. Reconcile the result before starting another attempt.";
   }
   if (["browse", "assets"].includes(action)) {
     byId("pagination").hidden = !continuationToken;
@@ -139,10 +202,13 @@ byId("view").addEventListener("change", changeBrowseView);
 byId("folder").addEventListener("change", invalidateBrowseContext);
 byId("files").addEventListener("click", () => run("assets", {connectionId: connectionId(), collectionRef: byId("folder").value}));
 byId("folders").addEventListener("click", () => {
+  const kind = LOCATION_KINDS[byId("view").value];
+  const folder = folderRecords.get(byId("folder").value);
   browseContext = {
     connectionId: connectionId(),
-    view: byId("view").value,
-    ...(byId("folder").value ? {collectionRef: byId("folder").value} : {})
+    locationKind: kind,
+    ...(folder?.collectionRef || folder?.collectionId ? {locationRef: folder.collectionRef || folder.collectionId} : {}),
+    ...(folder?.driveId ? {driveId: folder.driveId} : {})
   };
   run("browse", browseContext);
 });
@@ -150,15 +216,56 @@ byId("next-page").addEventListener("click", () => {
   if (!browseContext || !continuationToken) return;
   run("browse", {...browseContext, continuationToken});
 });
-byId("acquire").addEventListener("click", () => run("acquire", {connectionId: connectionId(), assetId: selected?.assetId || ""}));
+byId("acquire").addEventListener("click", () => run("acquire", {
+  connectionId: connectionId(),
+  selectionRef: selected?.selectionRef || selected?.opaqueSelectionRef || "",
+  artifactId: byId("artifact-id").value.trim(),
+  maximumBytes: byId("maximum-bytes").value.trim(),
+  maximumDurationSeconds: byId("maximum-duration").value.trim(),
+  publication: publicationPayload()
+}));
 byId("inspect").addEventListener("click", () => run("inspect", {connectionId: connectionId(), retainedArtifactId: retainedArtifact || ""}));
 byId("verify").addEventListener("click", () => run("verify", {connectionId: connectionId(), retainedArtifactId: retainedArtifact || ""}));
-byId("materialize").addEventListener("click", () => run("materialize", {connectionId: connectionId(), retainedArtifactId: retainedArtifact || ""}));
-byId("release").addEventListener("click", () => run("release", {connectionId: connectionId(), retainedArtifactId: retainedArtifact || ""}));
+byId("verified-read").addEventListener("click", () => run("verifiedRead", {connectionId: connectionId(), retainedArtifactId: retainedArtifact || "", purpose: byId("access-purpose").value.trim()}));
+byId("materialize").addEventListener("click", () => run("materialize", {connectionId: connectionId(), retainedArtifactId: retainedArtifact || "", purpose: byId("access-purpose").value.trim(), relativeOutputPath: byId("relative-output-path").value.trim()}));
+byId("release").addEventListener("click", () => {
+  if (retainedArtifact && window.confirm("Tombstone this retained artifact?")) run("release", {connectionId: connectionId(), retainedArtifactId: retainedArtifact, purpose: byId("access-purpose").value.trim(), idempotencyKey: byId("release-idempotency").value.trim()});
+});
 byId("revoke").addEventListener("click", () => {
   if (connectionId() && window.confirm("Revoke this selected Google Drive connection?")) run("revoke", {connectionId: connectionId()});
 });
-byId("graph").addEventListener("click", () => run("graph", {connectionId: connectionId()}));
+function graphBrowsePayload() {
+  const folder = folderRecords.get(byId("folder").value);
+  return {
+    connectionId: connectionId(),
+    locationKind: browseContext?.locationKind || LOCATION_KINDS[byId("view").value] || "my_drive_root",
+    ...(browseContext?.locationRef || folder?.collectionRef || folder?.collectionId
+      ? {locationRef: browseContext?.locationRef || folder.collectionRef || folder.collectionId} : {}),
+    ...(browseContext?.driveId || folder?.driveId ? {driveId: browseContext?.driveId || folder.driveId} : {})
+  };
+}
+function graphAcquirePayload() {
+  return {
+    connectionId: connectionId(),
+    selectionRef: selected?.selectionRef || selected?.opaqueSelectionRef || "",
+    artifactId: byId("artifact-id").value.trim(),
+    maximumBytes: byId("maximum-bytes").value.trim(),
+    maximumDurationSeconds: byId("maximum-duration").value.trim(),
+    publication: publicationPayload()
+  };
+}
+byId("graph-prepare-browse").addEventListener("click", () => run("graphPrepareBrowse", graphBrowsePayload()));
+byId("graph-prepare-acquire").addEventListener("click", () => run("graphPrepareAcquire", graphAcquirePayload()));
+byId("graph-submit").addEventListener("click", () => {
+  if (!graphPreparedKind) return render("graphSubmit", {isSuccess: false, reasonCodes: ["graph_not_prepared"]});
+  run(graphPreparedKind === "browse" ? "graphSubmitBrowse" : "graphSubmitAcquire", {graphKind: graphPreparedKind});
+});
+byId("graph-status").addEventListener("click", () => run("graphStatus", {graphKind: byId("graph-kind").value}));
+byId("graph-cancel").addEventListener("click", () => {
+  const idempotencyKey = byId("graph-cancel-idempotency").value.trim();
+  if (!idempotencyKey) return render("graphCancel", {isSuccess: false, reasonCodes: ["graph_cancel_idempotency_key_required"]});
+  run("graphCancel", {graphKind: byId("graph-kind").value, idempotencyKey});
+});
 fetch("/session", {credentials: "same-origin"}).then(response => {
   if (!response.ok) throw new Error();
   return response.json();

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import hashlib
 import json
 import sys
 import tempfile
@@ -119,6 +120,56 @@ class EngineHandler(BaseHTTPRequestHandler):
             self._reply(404, {"message": "unknown"})
 
 
+class BinaryResponse:
+    def __init__(self, body: bytes, content_length: str | None, content_type: str = "application/octet-stream",
+                 *, overrun: bool = False):
+        self.status = 200
+        self._body = body
+        self._content_length = content_length
+        self._content_type = content_type
+        self._offset = 0
+        self._overrun = overrun
+
+    def getheader(self, name: str, default=None):
+        if name.casefold() == "content-length":
+            return self._content_length if self._content_length is not None else default
+        if name.casefold() == "content-type":
+            return self._content_type
+        return default
+
+    def read(self, size: int = -1) -> bytes:
+        if self._overrun and self._offset == 0:
+            self._offset = len(self._body)
+            return self._body
+        if self._offset >= len(self._body):
+            return b""
+        if size < 0:
+            size = len(self._body) - self._offset
+        end = min(self._offset + size, len(self._body))
+        chunk = self._body[self._offset:end]
+        self._offset = end
+        return chunk
+
+
+class BinaryConnection:
+    class Socket:
+        def settimeout(self, _timeout: float):
+            pass
+
+    def __init__(self, response: BinaryResponse):
+        self.sock = self.Socket()
+        self.response = response
+
+    def request(self, *_args, **_kwargs):
+        pass
+
+    def getresponse(self):
+        return self.response
+
+    def close(self):
+        pass
+
+
 class DriveClientTests(unittest.TestCase):
     def setUp(self):
         EngineHandler.calls = []
@@ -146,6 +197,48 @@ class DriveClientTests(unittest.TestCase):
 
     def client(self):
         return DriveClient(self.config, self.contracts.name)
+
+    def test_sanitize_preserves_nonnegative_verified_byte_count(self):
+        result = DriveClient._sanitize(
+            "verifiedRead", {"isSuccess": True, "verifiedBytesRead": 4096}
+        )
+        self.assertEqual(4096, result["verifiedBytesRead"])
+        self.assertNotIn(
+            "verifiedBytesRead",
+            DriveClient._sanitize("verifiedRead", {"isSuccess": True, "verifiedBytesRead": -1}),
+        )
+
+    def _verified_read(self, body: bytes, content_length: str | None,
+                       content_type: str = "application/octet-stream", *, overrun: bool = False):
+        client = self.client()
+        response = BinaryResponse(body, content_length, content_type, overrun=overrun)
+        connection = BinaryConnection(response)
+        with mock.patch.object(client_module.http.client, "HTTPConnection", return_value=connection):
+            return client._request("GET", "/verified", query={}, body=None, expect_binary=True)
+
+    def test_verified_read_streams_bounded_bytes_and_returns_hash_only(self):
+        result = self._verified_read(b"verified-content", str(len(b"verified-content")))
+        self.assertTrue(result["isSuccess"])
+        self.assertEqual(len(b"verified-content"), result["verifiedBytesRead"])
+        self.assertEqual(hashlib.sha256(b"verified-content").hexdigest(), result["contentSha256"])
+
+    def test_verified_read_rejects_short_overrun_oversized_and_wrong_type(self):
+        self.assertEqual(
+            ["engine_verified_read_incomplete"],
+            self._verified_read(b"short", "10")["reasonCodes"],
+        )
+        self.assertEqual(
+            ["engine_verified_read_overrun"],
+            self._verified_read(b"four", "3", overrun=True)["reasonCodes"],
+        )
+        self.assertEqual(
+            ["engine_verified_read_size_invalid"],
+            self._verified_read(b"", str(client_module._MAX_VERIFIED_READ_BYTES + 1))["reasonCodes"],
+        )
+        self.assertEqual(
+            ["engine_verified_read_refused"],
+            self._verified_read(b"not-media", "9", "application/json")["reasonCodes"],
+        )
 
     def test_callback_uses_published_plain_text_contract_and_keeps_secrets_private(self):
         client = self.client()

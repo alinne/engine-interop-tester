@@ -42,14 +42,17 @@ remains enabled, redirects are rejected, environment proxies are disabled, and r
    optional routes are projected. The UI never auto-acquires, opens bytes, or falls back to the legacy
    public import path. Provider resource keys, raw refs, local paths and content are removed from the
    browser projection.
-6. Revoke a selected connection only after an explicit confirmation. The graph/node probe is a
-   capability check only; it remains unavailable until a committed Engine graph contract exposes the
-   canonical invocation route.
+6. Prepare and explicitly submit browse/acquire graphs using Engine-issued invocation handles.
+   Reconcile status, request cancellation with an idempotency key, and recover the opaque retained
+   artifact descriptor from durable job status. A retry requires status reconciliation and a fresh
+   prepare; the tester never automatically resubmits an uncertain import.
+7. Revoke a selected connection only after an explicit confirmation.
 
-The current pinned Engine commit predates these optional route declarations, so the new actions report
-`capability_unavailable` until contracts are regenerated from the later committed Engine source. This
-is intentional: the tester never fabricates a route from an uncommitted Engine worktree. Progress,
-cancel/retry/recovery and ISO/DICOM opening remain Engine/app integration work beyond this diagnostic.
+The pinned committed Engine contract projects 22 operations, including graph prepare, submit, status,
+cancel and retained-artifact access. An unavailable host capability remains `capability_unavailable`;
+projected routes do not prove runtime qualification. Verified reads are consumed server-side with
+bounded streaming and return only a byte count and SHA-256 hash. The diagnostic never renders medical content or
+implements ISO/DICOM parsing; those remain consumer application responsibilities.
 
 ## Contract authority and proof
 
@@ -72,8 +75,8 @@ not change or read uncommitted Engine source to verify that pinned input.
 Browse operations are catalogued **internal** by the selected Engine contract. This internal tester
 does not promote them to a stable consumer SDK. Use only an Engine host that deliberately exposes
 them to the authorized scope. A missing route, failed authorization or HTTP-200 semantic failure
-remains a failure. The new consumer uses contract bindings because the selected Control SDK lacks
-these operations; SDK parity remains Engine-owned work.
+remains a failure. The Python consumer uses generated contract bindings. Engine owns the corresponding typed .NET SDK
+and CLI operations; this tester does not recreate their shared semantics.
 
 The local action schema is presentation-only. Requests inject the fixed configured owner scope;
 connections and collections must have been returned for that scope and connection. Starting a new
@@ -82,13 +85,13 @@ failed sign-in attempts cannot reuse the previous account bindings. Browser inpu
 cannot select a different tenant, Engine origin, bearer token, OAuth state, route or HTTP method.
 The UI displays allowlisted fields without HTML interpolation. No request/response files are saved.
 
-**Compliance gap:** the current Drive browse/OAuth route set does not expose a qualified canonical
-`ComplianceEventRecord` delivery contract to this consumer. Do not add a local event schema or logging
-backbone. Engine must emit canonical events and policy decisions at its existing authorization and
-operation boundaries and expose references/trace linkage before this harness can claim conformance.
-This baseline is incomplete under the repository's compliance requirement. The compliant next slice
-belongs to Engine; it must include canonical actor/tenant/session IDs and correlate the actual
-operation, without recording tokens, provider bodies or private file content.
+**Compliance dependency:** meaningful Engine operations use the canonical event and policy sinks in
+Engine. The current Engine readiness candidate adds validated actor/tenant/session identity and
+scope-decision linkage to the existing HTTP completion event, plus cloud-media allow/deny events.
+Custody operations retain their existing canonical lifecycle evidence. This consumer adds no local
+event schema or logging backbone and must not record tokens, provider bodies or private content.
+Conformance remains pending the Engine candidate's verified publication and live audit inspection;
+passing synthetic consumer tests alone cannot close that dependency.
 
 Synthetic HTTP tests prove the harness only. They do not qualify Engine's provider logic or a live
 Google account. Live proof still requires configured Google OAuth consent and personal/shared test
@@ -96,12 +99,13 @@ locations, synthetic provider failure/recovery tests in Engine, and successful I
 
 ## Ownership and retention
 
-External Connections owns this consumer-only source slice on Mac Studio. Native remains the shared
-Engine writer, Platform its boundary reviewer and Merges its publisher; the DICOM-to-image integration
-hold is unchanged. This app creates no build, dependency cache, evidence export or retained download.
+External Connections owns this consumer-only source slice and its isolated Engine readiness candidate
+on Mac Studio. Vault integration and the DICOM-to-image handoff remain separate; no Native, Platform
+or Merges queue is dispatched from this diagnostic work. This app creates no build, dependency cache,
+evidence export or retained download.
 Tests disable Python bytecode writes and use short-lived loopback servers. Budget: 10 MB mutable test
 output, expected near zero. No persistent consumer pins or runtime database. Stop the process to
-release sockets and in-memory state. Review the temporary branch on November 19, 2026; retire the
+release sockets and in-memory state. Review the temporary branch on November 20, 2026; retire the
 worktree through its supported Git owner only after publication and proof of no unique/unrelated work.
 Source recovery is the named committed Git branch, not a disposable output directory.
 
@@ -111,9 +115,12 @@ This is a single-user local diagnostic, not an unattended production service. Py
 presentation and bounded HTTP orchestration; it implements no media or performance-sensitive Engine
 path. Clock authority, scheduling and provider budgets remain Engine-owned; this client makes no LAN
 clock or WAN synchronization claim. GPU and NPU execution are not applicable. Each click makes at
-most one synchronous Engine request, with a 10-second network timeout and a 1 MiB response ceiling;
-there are no background polls or automatic retries. The diagnostic never stores file bytes and has
-no paid-service execution route. Operation evidence/replay remains the compliance gap above.
+most one synchronous Engine request. JSON responses have a 10-second network timeout and a 1 MiB
+response ceiling. Verified binary reads require a declared length of at most 64 GiB, stream in
+64 KiB chunks, and have a cooperative ten-minute total deadline. Short and overlong responses fail;
+bytes are hashed and discarded rather than accumulated. There are no background polls or automatic
+retries. The diagnostic never stores file bytes and has
+no paid-service execution route. Operation evidence remains subject to the Engine compliance dependency above.
 
 ## November 18 baseline checks
 
@@ -155,3 +162,14 @@ This registration and synthetic callback proof do not establish live Drive quali
 
 Use HTTPS with normal certificate validation and an explicit certificate pin for live OAuth
 communication with Engine. HTTP loopback support exists for synthetic local tests only.
+
+
+## November 19 readiness candidate checks
+
+The focused verifier passes 72 synthetic cases, JavaScript syntax, committed-source route projection,
+shell boundary and API-boundary checks. Source review confirms account/scope validation precedes
+terminal settlement, uncertain submits cannot be blindly replayed, active tickets cannot be replaced,
+and only successful bound graph output may restore retained artifacts. The 1,000-line transport
+adapter remains one cohesive local diagnostic state machine during qualification; extract graph
+state and verified streaming helpers before adding another provider or operation family. This
+bounded disposition does not authorize a parallel provider, storage or audit implementation.
