@@ -1,5 +1,6 @@
 """Prove the route generator follows committed catalog authority and rejects drift."""
 import importlib.util
+import hashlib
 from pathlib import Path
 import subprocess
 import tempfile
@@ -118,3 +119,42 @@ class ContractProjectionTests(unittest.TestCase):
         self.assertEqual('/engine/v1/graph-jobs/tenants/{tenantId}/scopes/{scopeId}/invocations/{invocationRef}/watch',
                          result['operations']['graphWatch']['path'])
         self.assertIn(str(graph.relative_to(self.root)), result['sourceHashes'])
+
+    def add_dicom_route(self, *, catalog=True, target=True):
+        self.media.write_text(self.media.read_text() + '\npublic static class Media\n    {\n'
+                              '        public const string DicomCatalogRead = DicomCatalogReadContractV1.RouteTemplate;\n    }')
+        if catalog:
+            self.catalog.write_text(self.catalog.read_text() + '\nStable("media.dicom.verified-catalog.read", "POST", EngineControlApiRoutes.Media.DicomCatalogRead),')
+        contract = self.root / projection.CONTRACT_ROOT / 'DicomCatalogReadContractV1.cs'
+        if target:
+            contract.write_text('public static class DicomCatalogReadContractV1\n{\n'
+                                '    public const string RouteTemplate = "/canonical/catalog:read";\n}')
+        self.run_git('add', '.')
+        self.run_git('-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '-qm', 'DICOM route')
+        return contract
+
+    def test_dicom_reference_uses_committed_contract_and_hashes_dependency(self):
+        contract = self.add_dicom_route()
+        result = projection.project(self.root)
+        self.assertEqual('/canonical/catalog:read', result['operations']['dicomCatalog']['path'])
+        self.assertEqual('POST', result['operations']['dicomCatalog']['method'])
+        self.assertEqual(hashlib.sha256(contract.read_bytes()).hexdigest(),
+                         result['sourceHashes'][str(contract.relative_to(self.root))])
+
+    def test_dicom_reference_without_catalog_authority_is_rejected(self):
+        self.add_dicom_route(catalog=False)
+        with self.assertRaisesRegex(ValueError, 'Missing canonical optional operation'):
+            projection.project(self.root)
+
+    def test_dicom_reference_without_target_is_rejected(self):
+        self.add_dicom_route(target=False)
+        with self.assertRaises(ValueError):
+            projection.project(self.root)
+
+    def test_dicom_dependency_drift_is_rejected_but_pinned_source_is_stable(self):
+        contract = self.add_dicom_route()
+        baseline = projection.project(self.root)
+        contract.write_text(contract.read_text().replace('/canonical/', '/tampered/'))
+        with self.assertRaisesRegex(ValueError, 'uncommitted'):
+            projection.project(self.root)
+        self.assertEqual(baseline, projection.project(self.root, baseline['sourceCommit']))

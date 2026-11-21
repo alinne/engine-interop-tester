@@ -7,7 +7,9 @@
     "src/Linnaeus.Engine.ModelFabric.Contracts/EngineControlApiRoutes.Control.cs": "f78b4bed988fa8d0d29377284a18dbb03275fc5b112d2871ed43bab2e04e5b34",
     "src/Linnaeus.Engine.ModelFabric.Contracts/EngineControlApiRoutes.MediaArtifactLifecycle.cs": "0f6287ecc4e6391987a3c95b275848ae8d50c37f41c8fda97c9129ac3440247f",
     "src/Linnaeus.Engine.ModelFabric.Contracts/EngineControlApiRoutes.ExternalMediaGraph.cs": "d45ffcd5617bffa5b6a41c66276b4269b000ef07af1605bff54d0b1ac260be56",
-    "src/Linnaeus.Engine.ModelFabric.Contracts/EngineControlApiRoutes.GraphJobs.cs": "dbc53f5d6ba3670235e90a312b1b1f56710a9aa1f477de91d6c285ad5b5ff152"
+    "src/Linnaeus.Engine.ModelFabric.Contracts/EngineControlApiRoutes.GraphJobs.cs": "dbc53f5d6ba3670235e90a312b1b1f56710a9aa1f477de91d6c285ad5b5ff152",
+    "src/Linnaeus.Engine.ModelFabric.Contracts/DicomCatalogReadContractV1.cs": "f091b6960b4a5e71e47e792278354ff047a7120fdf2eb6d93f5dd31aabc91822",
+    "src/Linnaeus.Engine.ModelFabric.Contracts/DicomFrameReadContractV1.cs": "f8fa9c9aed3aeedaa15d3c7b9d5e134370643a3c652805961d259a4f37bb562d"
   },
   "operations": {
     "readiness": {
@@ -50,6 +52,18 @@
       "operationId": "cloud-media.oauth.callback",
       "method": "GET",
       "path": "/engine/v1/cloud/oauth/callback/{providerId}",
+      "visibility": "stable"
+    },
+    "dicomCatalog": {
+      "operationId": "media.dicom.verified-catalog.read",
+      "method": "POST",
+      "path": "/engine/v1/media/artifacts/{artifactId}/dicom-catalog:read",
+      "visibility": "stable"
+    },
+    "dicomFrame": {
+      "operationId": "media.dicom.verified-frame.read",
+      "method": "POST",
+      "path": "/engine/v1/media/artifacts/{artifactId}/dicom-frame:read",
       "visibility": "stable"
     },
     "graphPrepareBrowse": {

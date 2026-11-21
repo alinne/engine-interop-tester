@@ -20,6 +20,8 @@ SELECTION = {
 # selected source determines availability; this table cannot manufacture
 # routes while a parent Engine change is uncommitted.
 OPTIONAL_SELECTION = {
+    "dicomCatalog": ("Media", "DicomCatalogRead", "media.dicom.verified-catalog.read"),
+    "dicomFrame": ("Media", "DicomFrameRead", "media.dicom.verified-frame.read"),
     "graphPrepareBrowse": ("ExternalMediaGraph", "PrepareBrowseTemplate", "external-media.graph.prepare-browse"),
     "graphPrepareAcquire": ("ExternalMediaGraph", "PrepareAcquireRetainedTemplate", "external-media.graph.prepare-acquire-retained"),
     "graphSubmitBrowse": ("ExternalMediaGraph", "BrowseTemplate", "external-media.graph.browse"),
@@ -42,6 +44,33 @@ SOURCE_FILES = [CONTRACT_ROOT + "EngineControlApiRoutes" + suffix + ".cs"
                 for suffix in ("", ".Media", ".Control")]
 OPTIONAL_SOURCE_FILES = [CONTRACT_ROOT + "EngineControlApiRoutes" + suffix + ".cs"
                          for suffix in (".MediaArtifactLifecycle", ".ExternalMediaGraph", ".GraphJobs")]
+# Resolve only these contract-owned aliases, never arbitrary C# expressions.
+# Their committed bytes join the same provenance and dirty-source checks as routes.
+ROUTE_REFERENCES = {
+    name + ".RouteTemplate": CONTRACT_ROOT + name + ".cs"
+    for name in ("DicomCatalogReadContractV1", "DicomFrameReadContractV1")
+}
+OPTIONAL_SOURCE_FILES += list(ROUTE_REFERENCES.values())
+
+
+def resolve_path(declaration, member, files):
+    constant = re.search(r"public const string " + re.escape(member) + r'\s*=\s*([^;]+);', declaration)
+    if not constant:
+        return None
+    expression = constant[1].strip()
+    literal = re.fullmatch(r'"([^"\r\n]+)"', expression)
+    if literal:
+        return literal[1]
+    source = ROUTE_REFERENCES.get(expression)
+    if source not in files:
+        raise ValueError(f"Unresolved canonical route reference: {member}")
+    owner, target = expression.split('.')
+    text = files[source].decode("utf-8-sig")
+    contract = re.search(r"public static class " + owner + r"\s*\{(.*?)\n\}", text, re.S)
+    value = re.search(r"public const string " + target + r'\s*=\s*"([^"\r\n]+)";', contract[1]) if contract else None
+    if not value:
+        raise ValueError(f"Unresolved canonical route reference: {member}")
+    return value[1]
 
 
 def project(root, source_commit=None):
@@ -69,23 +98,23 @@ def project(root, source_commit=None):
         declaration = re.search(r"public static class " + family + r"\s*\{(.*?)\n    \}", all_text, re.S)
         if not declaration:
             raise ValueError(f"Missing canonical family: {family}")
-        path = re.search(r"public const string " + member + r'\s*=\s*"([^"\r\n]+)";', declaration[1])
+        path = resolve_path(declaration[1], member, files)
         entry = re.search(r'(Stable|Internal)\("' + re.escape(operation_id) + r'", "([A-Z]+)", EngineControlApiRoutes\.' + family + r"\." + member + r"[,)]", catalog)
         if not path or not entry:
             raise ValueError(f"Missing canonical operation: {operation_id}")
-        operations[action] = {"operationId": operation_id, "method": entry[2], "path": path[1],
+        operations[action] = {"operationId": operation_id, "method": entry[2], "path": path,
                               "visibility": entry[1].lower()}
     for action, (family, member, operation_id) in OPTIONAL_SELECTION.items():
         declaration = re.search(r"public static class " + family + r"\s*\{(.*?)\n    \}", all_text, re.S)
         if not declaration:
             continue
-        path = re.search(r"public const string " + member + r'\s*=\s*"([^"\r\n]+)";', declaration[1])
+        path = resolve_path(declaration[1], member, files)
         entry = re.search(r'(Stable|Internal)\("' + re.escape(operation_id) + r'", "([A-Z]+)", EngineControlApiRoutes\.' + family + r"\." + member + r"[,)]", catalog)
         if not path and not entry:
             continue
         if not path or not entry:
             raise ValueError(f"Missing canonical optional operation: {operation_id}")
-        operations[action] = {"operationId": operation_id, "method": entry[2], "path": path[1],
+        operations[action] = {"operationId": operation_id, "method": entry[2], "path": path,
                               "visibility": entry[1].lower()}
     return {"sourceRepository": "alinne/linnaeus-engine", "sourceCommit": commit,
             "sourceHashes": {name: hashlib.sha256(data).hexdigest() for name, data in files.items()},
