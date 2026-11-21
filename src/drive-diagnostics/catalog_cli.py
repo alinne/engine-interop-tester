@@ -159,6 +159,10 @@ def _summary(raw: bytes, request: CatalogRequest) -> dict[str, object]:
                 value[key] = item
             return value
         value = json.loads(raw, object_pairs_hook=unique)
+        # Python equates True and 1.0 with 1; identity revisions require the
+        # exact JSON integer representation, including beyond float precision.
+        if type(value["source"]["revision"]) is not int:
+            raise ValueError()
         if (value["contractVersion"] != "dicom-verified-catalog-v1"
                 or value["source"] != {"artifactId": request.artifact_id,
                                       "revision": request.revision, "sha256": request.source_sha256}):

@@ -141,6 +141,39 @@ class CatalogCliTests(unittest.TestCase):
             catalog_cli.read_catalog(bad, runner=runner)
         runner.assert_not_called()
 
+    def test_source_revision_requires_an_exact_json_integer(self):
+        request = self.request.__class__(**{**self.request.__dict__, "revision": 1})
+        for revision in (True, 1.0, "1"):
+            value = json.loads(json.dumps(CATALOG))
+            value["source"]["revision"] = revision
+            with self.subTest(revision=revision):
+                with self.assertRaisesRegex(catalog_cli.CatalogCliError, "catalog_output_invalid"):
+                    catalog_cli.read_catalog(request, runner=lambda _a, _t: (0, json.dumps(value).encode()))
+
+    def test_large_int64_source_revision_is_preserved_without_float_roundtrip(self):
+        for revision in (9007199254740993, 9223372036854775807):
+            request = self.request.__class__(**{**self.request.__dict__, "revision": revision})
+            value = json.loads(json.dumps(CATALOG))
+            value["source"]["revision"] = revision
+            def runner(argv, _timeout):
+                document = json.loads(Path(argv[argv.index("--request-file") + 1]).read_text())
+                self.assertIs(type(document["revision"]), int)
+                self.assertEqual(revision, document["revision"])
+                return 0, json.dumps(value).encode()
+            with self.subTest(revision=revision):
+                self.assertEqual("Supported", catalog_cli.read_catalog(request, runner=runner)["status"])
+                value["source"]["revision"] -= 1
+                with self.assertRaisesRegex(catalog_cli.CatalogCliError, "catalog_output_invalid"):
+                    catalog_cli.read_catalog(request, runner=runner)
+
+    def test_artifact_and_hash_mismatch_are_refused(self):
+        for key, replacement in (("artifactId", "different-artifact"), ("sha256", "b" * 64)):
+            value = json.loads(json.dumps(CATALOG))
+            value["source"][key] = replacement
+            with self.subTest(key=key):
+                with self.assertRaisesRegex(catalog_cli.CatalogCliError, "catalog_output_invalid"):
+                    catalog_cli.read_catalog(self.request, runner=lambda _a, _t: (0, json.dumps(value).encode()))
+
     def test_real_runner_caps_output_and_times_out(self):
         with self.assertRaisesRegex(catalog_cli.CatalogCliError, "catalog_output_too_large"):
             with mock.patch.object(catalog_cli, "MAX_CATALOG_BYTES", 1024):
