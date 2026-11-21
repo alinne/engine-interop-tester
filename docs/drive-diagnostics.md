@@ -67,6 +67,40 @@ projected routes do not prove runtime qualification. Verified reads are consumed
 bounded streaming and return only a byte count and SHA-256 hash. The diagnostic never renders medical content or
 implements ISO/DICOM parsing; those remain consumer application responsibilities.
 
+## Catalog handoff boundary
+
+The Engine `media-device dicom-catalog` command is the canonical catalog handoff for an
+authorized retained artifact. Its request binds the artifact ID, revision and source SHA-256;
+the CLI validates the response with Engine's catalog contract before returning metadata.
+This command exists in the committed Engine source pinned by this tester. It requires an
+explicitly selected, already-built CLI, a pinned HTTPS Engine origin and an Engine token file.
+It does not start Engine, build a CLI, acquire Google credentials or grant artifact access.
+
+The standalone POSIX adapter projects only counts and status, discards private metadata,
+and removes its private temporary request document after every attempt:
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 python3 src/drive-diagnostics/catalog_cli.py \
+  --executable /approved/path/engine --executable-sha256 APPROVED_BINARY_SHA256 \
+  --base-url https://engine.example --certificate-sha256 ENGINE_CERTIFICATE_SHA256 \
+  --token-file /approved/private/token-file --artifact-id RETAINED_ARTIFACT_ID \
+  --revision 1 --source-sha256 RETAINED_SOURCE_SHA256
+```
+
+Use the actual retained artifact revision and digest, and the approved binary's digest from
+its qualified publication. The executable checksum is an invocation pin, not proof of its
+dependency closure or source provenance. The existing token file must be private and remains
+owned by its credential provider. Tokens never enter arguments, output or the child environment.
+Only the explicit executable runs; no shell, PATH search, automatic build or host startup occurs.
+The adapter caps stdout at 16 MiB, discards stderr and has a finite process deadline. Synthetic
+adapter tests exercise that boundary; running them does not qualify a real Engine/Google/medical
+host. The browser UI does not automatically invoke this standalone command.
+
+Catalog acceptance is metadata evidence only. It does not prove pixel decoding, display,
+successful ISO opening or live Google Drive qualification. The medical owner retains those
+execution and qualification boundaries. A failed command, timeout or malformed response must
+remain a failed handoff; no fallback parser or local file opening is permitted here.
+
 ## Contract authority and proof
 
 Before acquisition, an Engine administrator must register a retention policy in the selected tenant
