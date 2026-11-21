@@ -77,7 +77,7 @@ explicitly selected, already-built CLI, a pinned HTTPS Engine origin and an Engi
 It does not start Engine, build a CLI, acquire Google credentials or grant artifact access.
 
 The standalone POSIX adapter projects only counts and status, discards private metadata,
-and removes its private temporary request document after every attempt:
+and removes its private temporary request document after confirmed process-group cessation:
 
 ```sh
 PYTHONDONTWRITEBYTECODE=1 python3 src/drive-diagnostics/catalog_cli.py \
@@ -92,7 +92,25 @@ its qualified publication. The executable checksum is an invocation pin, not pro
 dependency closure or source provenance. The existing token file must be private and remains
 owned by its credential provider. Tokens never enter arguments, output or the child environment.
 Only the explicit executable runs; no shell, PATH search, automatic build or host startup occurs.
-The adapter caps stdout at 16 MiB, discards stderr and has a finite process deadline. Synthetic
+The adapter caps stdout at 16 MiB, discards stderr and has a finite process deadline plus a
+five-second settlement bound. It requires POSIX `waitid/WNOWAIT` and default `SIGCHLD` handling
+to retain the leader identity until the last group signal. It joins that child and observes group
+absence before deleting the request. This is custody of the trusted executable's process group;
+executables that detach children into other groups/sessions require a supported host supervisor
+and are outside this adapter's qualification. It does not prove arbitrary descendant closure.
+An `engine_cli_close_uncertain` failure takes precedence over success, timeout or cancellation.
+It retains the `engine-catalog-request-*` private directory (`0700`, request `0600`) in the
+system temporary root for the invoking operator's recovery; it does not print private paths.
+In-process callers receive the directory and original process object on the exception. Preserve
+that custody and review within 24 hours; retire through its supported owner only after actual
+closure is established. No automatic retry or cleanup is authorized by the error.
+An interrupted exit observation retries within the invocation deadline. If the observer fails
+irrecoverably, the adapter refuses further numeric group signals because ownership may be lost.
+The standalone CLI cannot retain its in-memory process owner after exiting in that state;
+recovery requires the invoking host's supported owner/watchdog. Use the in-process interface
+with that owner when recoverable lifetime custody is required. Request retention alone is not
+proof of a joined process, and this diagnostic is not a production process supervisor.
+Synthetic
 adapter tests exercise that boundary; running them does not qualify a real Engine/Google/medical
 host. The browser UI does not automatically invoke this standalone command.
 

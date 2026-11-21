@@ -14,6 +14,7 @@ import json
 import os
 import re
 import selectors
+import shutil
 import signal
 import stat
 import subprocess
@@ -27,12 +28,22 @@ from urllib.parse import urlsplit
 
 
 MAX_CATALOG_BYTES = 16 * 1024 * 1024
+_CLOSE_TIMEOUT_SECONDS = 5.0
 _MAX_COUNT = 1_000_000
 _SHA256 = re.compile(r"[0-9a-fA-F]{64}\Z")
 
 
 class CatalogCliError(ValueError):
     """Fixed, non-sensitive adapter failure code."""
+
+
+class CatalogCliUncertainClose(CatalogCliError):
+    """The invocation failed to prove group cessation; retain request custody."""
+
+    def __init__(self):
+        super().__init__("engine_cli_close_uncertain")
+        self.request_directory: Path | None = None
+        self.process: subprocess.Popen | None = None
 
 
 @dataclass(frozen=True)
@@ -103,16 +114,53 @@ def _file_sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _group_absent(pgid: int) -> bool:
+    try:
+        os.killpg(pgid, 0)
+    except ProcessLookupError:
+        return True
+    except OSError:
+        pass
+    return False
+
+
+def _retire_process(process: subprocess.Popen) -> bool:
+    # WNOWAIT preserves the leader identity until this one owned-group signal.
+    # Never signal a numeric PGID after reaping its leader (possible ID reuse).
+    deadline = time.monotonic() + _CLOSE_TIMEOUT_SECONDS
+    try:
+        os.killpg(process.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    except OSError:
+        # A platform may refuse a signal to an already-exited leader. Still
+        # join it; only the subsequent absence observation can prove closure.
+        pass
+    try:
+        process.wait(timeout=max(0.001, deadline - time.monotonic()))
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    while True:
+        if _group_absent(process.pid):
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.01)
+
+
 def _run(argv: Sequence[str], timeout: float) -> tuple[int, bytes]:
     # This diagnostic runner uses POSIX process groups. Other hosts must supply
     # their supported process owner instead of silently losing tree cancellation.
-    if os.name != "posix":
+    if (os.name != "posix"
+            or not all(hasattr(os, name) for name in ("waitid", "WNOWAIT", "WEXITED"))
+            or signal.getsignal(signal.SIGCHLD) != signal.SIG_DFL):
         raise CatalogCliError("engine_cli_platform_unsupported")
     process = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                                stderr=subprocess.DEVNULL, start_new_session=True,
                                env={"LANG": "C.UTF-8"}, cwd="/")
     captured = bytearray()
     deadline = time.monotonic() + timeout
+    can_signal = True
     try:
         assert process.stdout is not None
         with selectors.DefaultSelector() as selector:
@@ -129,22 +177,46 @@ def _run(argv: Sequence[str], timeout: float) -> tuple[int, bytes]:
                 if len(captured) + len(chunk) > MAX_CATALOG_BYTES:
                     raise CatalogCliError("catalog_output_too_large")
                 captured.extend(chunk)
-        try:
-            code = process.wait(timeout=max(0.001, deadline - time.monotonic()))
-        except subprocess.TimeoutExpired:
-            raise TimeoutError() from None
-        return code, bytes(captured)
+        # Observe exit without reaping: EOF alone does not settle a child, and
+        # reaping here would make a later group cancellation vulnerable to reuse.
+        while True:
+            try:
+                observation = os.waitid(os.P_PID, process.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT)
+            except InterruptedError:
+                if time.monotonic() >= deadline:
+                    raise TimeoutError() from None
+                continue
+            except OSError:
+                # If ownership observation fails, never guess that the leader
+                # remains unreaped and signal a possibly reused numeric PGID.
+                can_signal = False
+                raise CatalogCliUncertainClose() from None
+            if observation is not None:
+                break
+            if time.monotonic() >= deadline:
+                raise TimeoutError()
+            time.sleep(0.01)
+        result = bytes(captured)
     finally:
-        # Always retire descendants, even when the direct child has already
-        # exited but left a pipe-owning descendant behind. No shared host PID is used.
+        closed = False
         try:
-            os.killpg(process.pid, signal.SIGKILL)
-        except ProcessLookupError:
+            if can_signal:
+                closed = _retire_process(process)
+        except BaseException:
+            # Even an interrupt during settlement must preserve request custody.
             pass
-        process.wait(timeout=5)
-        if process.stdout is not None:
-            process.stdout.close()
-        captured.clear()
+        finally:
+            try:
+                if process.stdout is not None:
+                    process.stdout.close()
+            except BaseException:
+                closed = False
+            captured.clear()
+        if not closed:
+            error = CatalogCliUncertainClose()
+            error.process = process
+            raise error from None
+    return process.returncode, result
 
 
 def _summary(raw: bytes, request: CatalogRequest) -> dict[str, object]:
@@ -191,8 +263,9 @@ def read_catalog(request: CatalogRequest, *, runner: Runner = _run) -> dict[str,
         request.validate()
         # Only the source binding enters this private temporary document. The
         # existing token file remains owned by its credential provider.
-        with tempfile.TemporaryDirectory(prefix="engine-catalog-request-") as directory:
-            root = Path(directory).resolve()
+        root = Path(tempfile.mkdtemp(prefix="engine-catalog-request-")).resolve()
+        retain_request = False
+        try:
             os.chmod(root, 0o700)
             path = root / "request.json"
             with path.open("x", encoding="utf-8") as stream:
@@ -206,6 +279,13 @@ def read_catalog(request: CatalogRequest, *, runner: Runner = _run) -> dict[str,
             if code != 0:
                 raise CatalogCliError("engine_cli_failed")
             return _summary(raw, request)
+        except CatalogCliUncertainClose as error:
+            retain_request = True
+            error.request_directory = root
+            raise
+        finally:
+            if not retain_request:
+                shutil.rmtree(root)
     except TimeoutError:
         raise CatalogCliError("engine_cli_timeout") from None
     except OSError:

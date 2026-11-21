@@ -3,6 +3,8 @@ from __future__ import annotations
 import importlib.util
 import hashlib
 import json
+import os
+import shutil
 import stat
 import sys
 import tempfile
@@ -191,6 +193,122 @@ class CatalogCliTests(unittest.TestCase):
                 catalog_cli.read_catalog(self.request, runner=runner)
             self.assertFalse(observed[0].exists())
             self.assertTrue(self.token_file.exists())
+
+    def test_uncertain_close_preserves_private_request_custody(self):
+        observed = []
+        def runner(argv, _timeout):
+            observed.append(Path(argv[argv.index("--request-file") + 1]))
+            raise catalog_cli.CatalogCliUncertainClose()
+        try:
+            with self.assertRaisesRegex(catalog_cli.CatalogCliError, "engine_cli_close_uncertain") as raised:
+                catalog_cli.read_catalog(self.request, runner=runner)
+            path = observed[0]
+            self.assertTrue(path.exists())
+            self.assertEqual(path.parent, raised.exception.request_directory)
+            self.assertEqual(0o700, stat.S_IMODE(path.parent.stat().st_mode))
+            self.assertEqual(0o600, stat.S_IMODE(path.stat().st_mode))
+            self.assertNotIn(str(path), str(raised.exception))
+            self.assertTrue(self.token_file.exists())
+        finally:
+            for path in observed:
+                shutil.rmtree(path.parent, ignore_errors=True)
+
+    def test_real_descendant_closure_precedes_request_cleanup(self):
+        # Exercise both inherited stdout and a descendant that closes the pipe;
+        # EOF and a reaped leader alone are not descendant closure evidence.
+        for pipe_owner in (True, False):
+            observed = []
+            absence_observations = []
+            group_absent = catalog_cli._group_absent
+            def observe_absence(pgid):
+                absent = group_absent(pgid)
+                absence_observations.append(absent)
+                return absent
+            def runner(argv, _timeout):
+                path = Path(argv[argv.index("--request-file") + 1])
+                observed.append(path)
+                script = ("import os,time\n"
+                          "if os.fork() == 0:\n"
+                          + (" pass\n" if pipe_owner else " os.close(1)\n")
+                          + " time.sleep(30)\n os._exit(0)\n"
+                          "os._exit(0)\n")
+                try:
+                    return catalog_cli._run([sys.executable, "-c", script], 0.2)
+                finally:
+                    self.assertTrue(path.exists(), "request retired before process owner settled")
+            try:
+                with self.subTest(pipe_owner=pipe_owner):
+                    with mock.patch.object(catalog_cli, "_CLOSE_TIMEOUT_SECONDS", 0.5), \
+                            mock.patch.object(catalog_cli, "_group_absent", side_effect=observe_absence):
+                        try:
+                            catalog_cli.read_catalog(self.request, runner=runner)
+                        except catalog_cli.CatalogCliUncertainClose as error:
+                            self.assertTrue(observed[0].exists())
+                            self.assertEqual(observed[0].parent, error.request_directory)
+                        except catalog_cli.CatalogCliError as error:
+                            self.assertEqual("engine_cli_timeout" if pipe_owner else "catalog_output_invalid", str(error))
+                            self.assertIn(True, absence_observations)
+                            self.assertFalse(observed[0].exists())
+            finally:
+                for path in observed:
+                    shutil.rmtree(path.parent, ignore_errors=True)
+
+    def test_group_signal_precedes_leader_reap_and_unknown_group_is_failure(self):
+        events = []
+        real_killpg, real_wait = os.killpg, catalog_cli.subprocess.Popen.wait
+        def killpg(pgid, sig):
+            if sig:
+                events.append("signal")
+            return real_killpg(pgid, sig)
+        def wait(process, *args, **kwargs):
+            events.append("reap")
+            return real_wait(process, *args, **kwargs)
+        with mock.patch.object(catalog_cli.os, "killpg", side_effect=killpg), \
+                mock.patch.object(catalog_cli.subprocess.Popen, "wait", new=wait), \
+                mock.patch.object(catalog_cli, "_group_absent", return_value=False, create=True), \
+                mock.patch.object(catalog_cli, "_CLOSE_TIMEOUT_SECONDS", 0.02, create=True):
+            with self.assertRaisesRegex(catalog_cli.CatalogCliError, "engine_cli_close_uncertain"):
+                catalog_cli._run([sys.executable, "-c", "pass"], 2)
+        self.assertEqual("signal", events[0])
+        self.assertIn("reap", events)
+
+    def test_failed_identity_observation_never_signals_a_numeric_group(self):
+        with mock.patch.object(catalog_cli.os, "waitid", side_effect=ChildProcessError()), \
+                mock.patch.object(catalog_cli.os, "killpg") as killpg:
+            with self.assertRaises(catalog_cli.CatalogCliUncertainClose) as raised:
+                catalog_cli._run([sys.executable, "-c", "pass"], 2)
+            killpg.assert_not_called()
+        # Test-owned single child has no descendants; reap it without signalling.
+        self.assertIsNotNone(raised.exception.process)
+        raised.exception.process.wait(timeout=2)
+
+    def test_interrupted_identity_observation_retries_without_losing_owner(self):
+        waitid = catalog_cli.os.waitid
+        calls = []
+        def interrupted_once(*args):
+            calls.append(args)
+            if len(calls) == 1:
+                raise InterruptedError()
+            return waitid(*args)
+        with mock.patch.object(catalog_cli.os, "waitid", side_effect=interrupted_once):
+            self.assertEqual((0, b""), catalog_cli._run([sys.executable, "-c", "pass"], 2))
+        self.assertGreaterEqual(len(calls), 2)
+
+    def test_interrupt_during_settlement_is_an_uncertain_close(self):
+        retire = catalog_cli._retire_process
+        def interrupted(process):
+            self.assertTrue(retire(process))
+            raise KeyboardInterrupt()
+        with mock.patch.object(catalog_cli, "_retire_process", side_effect=interrupted):
+            with self.assertRaises(catalog_cli.CatalogCliUncertainClose):
+                catalog_cli._run([sys.executable, "-c", "pass"], 2)
+
+    def test_nondefault_sigchld_owner_is_refused_before_launch(self):
+        with mock.patch.object(catalog_cli.signal, "getsignal", return_value=catalog_cli.signal.SIG_IGN), \
+                mock.patch.object(catalog_cli.subprocess, "Popen") as launch:
+            with self.assertRaisesRegex(catalog_cli.CatalogCliError, "engine_cli_platform_unsupported"):
+                catalog_cli._run([sys.executable, "-c", "pass"], 2)
+            launch.assert_not_called()
 
     def test_symlink_executable_is_rejected(self):
         alias = self.root / "alias"
