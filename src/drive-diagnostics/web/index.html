@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Google Drive · Engine diagnostics</title>
+<link rel="stylesheet" href="/style.css">
+<script defer src="/app.js">
+</script>
+</head>
+<body>
+<main>
+<header>
+<span class="eyebrow">EXTERNAL CONNECTIONS / ENGINE INTEROP TESTER</span>
+<h1>Google Drive test bench</h1>
+<p>Exercise the shared Engine connection. Keep provider credentials and file custody inside Engine.</p>
+<span class="badge">Local diagnostic · live qualification pending</span>
+</header>
+<div class="steps">
+<section>
+<span class="number">01</span>
+<h2>Connect</h2>
+<p>Check the configured Google application, then sign in using Google's consent screen.</p>
+<div class="buttons">
+<button data-action="readiness">Check configuration</button>
+<button data-action="start" class="primary">Sign in with Google</button>
+</div>
+<a id="consent" target="_blank" rel="noopener noreferrer" hidden>Continue to Google ↗</a>
+<button data-action="status">Check sign-in result</button>
+<p class="hint">The callback goes to Engine. Return here after consent.</p>
+</section>
+<section>
+<span class="number">02</span>
+<h2>Choose a connection</h2>
+<p>Only Google Drive connections in the configured Engine owner scope appear here.</p>
+<button data-action="connections">Refresh connections</button>
+<label for="connection">Engine connection</label>
+<select id="connection">
+<option value="">Load connections first</option>
+</select>
+<p class="hint">Changing the connection clears the current folder and file selection.</p>
+</section>
+</div>
+<section class="browser">
+<div class="section-top">
+<div>
+<span class="number">03</span>
+<h2>Browse files</h2>
+</div>
+<button id="folders" class="primary">Browse selected view</button>
+</div>
+<div class="views">
+<label for="view">Drive location</label>
+<select id="view">
+<option value="my-drive">My Drive</option>
+<option value="shared-with-me">Shared with me</option>
+<option value="shared-drives">Shared drives</option>
+</select>
+</div>
+<p class="hint">Browse is metadata-only. The location and continuation cursor stay bound to the selected Engine connection; provider IDs and resource keys remain inside Engine.</p>
+<p class="hint">Any provider-downloadable binary file can be selected for retained acquisition. Google Workspace-native files (Docs, Sheets, Slides, and similar) are shown but remain unavailable because they are not opaque binary downloads. Files without a capability signal are checked by Engine during acquisition.</p>
+<label for="folder">Folder returned by Engine</label>
+<select id="folder">
+<option value="">Choose a connection first</option>
+</select>
+<button id="open-folder">Open selected folder</button>
+<button id="next-page" hidden>Load next page</button>
+<div id="pagination" class="notice" hidden>Engine returned a continuation cursor. Continue only within this connection and view.</div>
+<div class="table-scroll">
+<table>
+<thead>
+<tr>
+<th>Select</th>
+<th>Name</th>
+<th>Type</th>
+<th>Size</th>
+<th>Download</th>
+</tr>
+</thead>
+<tbody id="assets">
+<tr>
+<td colspan="5">Files appear after a successful Engine response.</td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
+<div class="steps">
+<section>
+<span class="number">04</span>
+<h2>Retain &amp; inspect</h2>
+<p id="selection" role="status" aria-live="polite">Select one downloadable file.</p>
+<div class="form-grid">
+<label for="artifact-id">Opaque retained artifact ID (acquire or reload)</label>
+<input id="artifact-id" maxlength="160" placeholder="vault-drive-study-001">
+<p class="hint">For a post-reload inspection, enter the retained artifact ID returned by Engine. Engine checks access against the authenticated owner scope.</p>
+<label for="maximum-bytes">Maximum bytes</label>
+<input id="maximum-bytes" inputmode="numeric" value="1073741824">
+<label for="maximum-duration">Maximum duration (seconds)</label>
+<input id="maximum-duration" inputmode="numeric" value="3600">
+<label for="publication-file-name">Retained file name</label>
+<input id="publication-file-name" maxlength="512" placeholder="study.dcm">
+<label for="publication-role">Retention role</label>
+<input id="publication-role" maxlength="256" value="source">
+<label for="publication-kind">Artifact kind</label>
+<select id="publication-kind"><option value="SourceMedia">Source media</option></select>
+<label for="publication-classification">Data classification</label>
+<select id="publication-classification"><option value="Restricted">Restricted</option><option value="SpecialCategory">Special category</option></select>
+<label for="publication-subject-ids">Subject IDs (comma-separated, optional)</label>
+<input id="publication-subject-ids" placeholder="">
+<label for="publication-allowed-purposes">Allowed purposes</label>
+<input id="publication-allowed-purposes" value="storage,vault-diagnostics.inspect">
+<label for="publication-consent-purposes">Consent-required purposes (optional)</label>
+<input id="publication-consent-purposes" placeholder="">
+<label for="publication-retention-policy">Retention policy ID</label>
+<input id="publication-retention-policy" placeholder="Existing Engine retention policy ID">
+<label for="publication-retention-class">Retention class</label>
+<select id="publication-retention-class"><option value="Tier1_Operational">Tier 1 operational</option><option value="Tier2_Audit">Tier 2 audit</option></select>
+<label for="publication-idempotency">Publication idempotency key</label>
+<input id="publication-idempotency" placeholder="drive-diagnostics-attempt-001">
+</div>
+<div class="buttons">
+<button id="acquire">Acquire selected file</button>
+<button id="inspect">Inspect retained artifact</button>
+<button id="verify">Verify retained artifact</button>
+<button id="verified-read">Verified read (discard bytes)</button>
+<label for="access-purpose">Access purpose</label>
+<input id="access-purpose" value="vault-diagnostics.inspect" maxlength="128">
+<button id="materialize">Materialize verified artifact</button>
+<label for="relative-output-path">Relative output path (Engine-approved root)</label>
+<input id="relative-output-path" placeholder="diagnostics/study.dcm" maxlength="4096">
+<label for="release-idempotency">Release idempotency key</label>
+<input id="release-idempotency" placeholder="drive-diagnostics-release-001" maxlength="256">
+<button id="release">Tombstone retained artifact</button>
+<label for="delete-purpose">Deletion purpose</label>
+<input id="delete-purpose" value="vault-diagnostics.cleanup" maxlength="128">
+<label for="delete-idempotency">Deletion idempotency key</label>
+<input id="delete-idempotency" placeholder="drive-diagnostics-delete-001" maxlength="256">
+<button id="delete">Permanently delete retained artifact</button>
+<p class="notice">Deletion is an explicit, irreversible Engine-retained-artifact action. It does not delete the Google Drive source.</p>
+</div>
+<p id="retained-artifact-status" class="artifact-status" role="status" aria-live="polite">No retained artifact is bound to this connection yet.</p>
+<p class="notice">Acquisition is always explicit: browsing never downloads or opens patient content. Verified read is explicit and discards bytes after a bounded diagnostic transfer; it never displays or saves content. Materialization remains Engine-custodied.</p>
+</section>
+<section>
+<span class="number">05</span>
+<h2>Graph execution</h2>
+<p>Prepare and submit a canonical Engine graph, then reconcile durable status before any new attempt. There is no automatic retry.</p>
+<div class="buttons">
+<button id="graph-prepare-browse">Prepare browse graph</button>
+<button id="graph-prepare-acquire">Prepare acquire graph</button>
+<button id="graph-submit">Submit prepared graph</button>
+<button id="graph-status">Reconcile graph status</button>
+</div>
+<label for="graph-kind">Prepared graph</label>
+<select id="graph-kind"><option value="browse">Browse</option><option value="acquire">Acquire</option></select>
+<label for="graph-scope-id">Graph scope ID (optional recovery handle)</label>
+<input id="graph-scope-id" maxlength="256" placeholder="scope returned by Engine">
+<label for="graph-invocation-ref">Graph invocation ref (optional recovery handle)</label>
+<input id="graph-invocation-ref" maxlength="64" placeholder="64-character Engine invocation ref">
+<label for="graph-cursor">Watch cursor (JSON, optional)</label>
+<textarea id="graph-cursor" maxlength="1048576" rows="4" placeholder='{"contractVersion":1,"scope":{...},"jobCursors":[...]}'></textarea>
+<button id="graph-watch">Watch from cursor</button>
+<label for="graph-cancel-idempotency">Cancel idempotency key</label>
+<input id="graph-cancel-idempotency" maxlength="128" placeholder="drive-diagnostics-cancel-001">
+<button id="graph-cancel">Request graph cancellation</button>
+<p class="hint">After a reload, enter the scope and invocation returned by Engine to inspect status or watch. The app never resubmits a recovered graph. Cancellation is an intent-only request. Engine owns the durable graph control plan. A failed or uncertain submit is reconciled with status; after a terminal result, prepare a fresh graph before explicitly submitting again.</p>
+</section>
+<section>
+<span class="number">06</span>
+<h2>Connection controls</h2>
+<p>Provider revocation is a separate explicit action and is never inferred from sign-out or a refresh.</p>
+<div class="buttons">
+<button id="revoke">Revoke selected connection</button>
+</div>
+</section>
+<section>
+<span class="number">07</span>
+<h2>Result</h2>
+<p id="status" role="status" aria-live="polite">Ready to check Engine.</p>
+<pre id="result">No requests made.</pre>
+<p class="hint">Sanitized response only. Nothing is saved by this app. Synthetic tests and live Google qualification are separate proof.</p>
+</section>
+</div>
+<footer>This diagnostic does not upload, publish or modify Google Drive files. Retained-artifact deletion is explicit and Engine-authorized; Engine authentication and policy remain authoritative.</footer>
+</main>
+</body>
+</html>

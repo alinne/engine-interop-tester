@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:engine-interop-tester:drive-diagnostics-action:v1",
+  "title": "Local diagnostic presentation action (not an Engine API)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["action"],
+  "properties": {
+    "action": {"enum": ["readiness", "start", "status", "connections", "collections", "assets", "acquire"]},
+    "payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "connectionId": {"type": "string", "maxLength": 4096},
+        "collectionRef": {"type": "string", "maxLength": 4096},
+        "assetId": {"type": "string", "maxLength": 4096}
+      }
+    }
+  }
+}
